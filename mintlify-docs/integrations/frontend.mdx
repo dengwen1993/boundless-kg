@@ -1,0 +1,221 @@
+---
+title: "前端 (frontend-vue)"
+description: "Vue 3 + Vite + TypeScript + Element Plus + Pinia + D3 + Mermaid"
+---
+
+## 技术栈
+
+| 层 | 选型 |
+| --- | --- |
+| 框架 | Vue 3 Composition API + `<script setup>` |
+| 构建 | Vite 5 |
+| 语言 | TypeScript 5 |
+| UI 组件 | Element Plus |
+| 状态 | Pinia |
+| 图渲染 | D3 v7（力导向 + 树形） |
+| 图表 | Mermaid |
+| HTTP | 原生 `fetch` + axios |
+
+## 单页 + 三视图（无 vue-router）
+
+`frontend-vue/src/main.ts` —— **没有 vue-router**，整个应用是一个 SPA，通过 Pinia store 切换视图：
+
+```typescript
+// stores/graph.ts
+type ViewMode = 'graph' | 'outline' | 'associations'
+export const useGraphStore = defineStore('graph', () => {
+  const viewMode = ref<ViewMode>('graph')
+  return { viewMode, ... }
+})
+```
+
+```vue
+<!-- App.vue -->
+&lt;template&gt;
+  <TopBar />
+  <div class="workspace">
+    <GraphCanvas v-if="graphStore.viewMode === 'graph'" />
+    <OutlineView v-else-if="graphStore.viewMode === 'outline'" />
+    <AssociationsView v-else />
+    <NodeNotePanel />
+    <ChatPanel />
+  </div>
+</template>
+```
+
+**为什么不上 vue-router？** 单页应用，URL 不需要承载视图状态（视图状态在 store）。简化心智负担，build 也更快。
+
+## 布局
+
+```text
+┌─────────────────────────────────────────────────┐
+│                  TopBar                          │  ← TopBar.vue
+│  [领域选择] [搜索框] [视图切换] [+节点] [...]   │
+├──────────┬──────────────────────────┬──────────┤
+│ Graph    │                          │ Chat     │
+│ Canvas   │   Node Note Panel        │ Panel    │
+│ (D3)     │   (inline)               │ (always) │
+│          │                          │          │
+│ 或       │                          │          │
+│ Outline  │                          │          │
+│ (Mermaid)│                          │          │
+│          │                          │          │
+│ 或       │                          │          │
+│ Associa- │                          │          │
+│ tions    │                          │          │
+│ (D3)     │                          │          │
+└──────────┴──────────────────────────┴──────────┘
+```
+
+## 三视图对比
+
+| 视图 | 适合 | 渲染 |
+| --- | --- | --- |
+| **Graph** | 整体结构概览 | D3 力导向图 |
+| **Outline** | 学习路径、纵向展开 | Mermaid 大纲 / 思维导图 |
+| **Associations** | 关联图（语义关系） | D3 力导向 + 边标注关系类型 |
+
+切换不重新请求数据——所有视图共享 `graphStore` 里的图谱数据。
+
+## 关键组件
+
+### 图谱画布
+
+`frontend-vue/src/components/GraphCanvas.vue`：
+
+- D3 力导向 + 树形布局切换
+- 节点拖拽、缩放（d3.zoom，支持 fit）
+- 节点单击 → `NodeNotePanel` 加载笔记
+- 节点双击 → 聚焦到该节点（中心放大）
+- 鼠标悬停 → tooltip（节点 summary）
+
+**大图缩放修复**（来自项目记忆）：
+
+```typescript
+// 300+ 节点时 d3.tree fit 会缩到 0.04，UI 不可读
+// 修复：fit() 必须 clamp 最小 scale；切领域不要 reset zoom
+function fitToView() {
+  const bounds = g.node()!.getBBox()
+  const scale = Math.max(0.3, Math.min(2, fullSize / Math.max(bounds.width, bounds.height)))
+  // ...
+}
+```
+
+### Mermaid 查看器
+
+`frontend-vue/src/components/MermaidViewer.vue` —— 独立全屏组件，通过 `<Teleport>` 挂到 body：
+
+```vue
+<Teleport to="body">
+  <div v-if="show" class="mermaid-viewer-overlay">
+    <MermaidRender :source="graphStore.mermaidSource" />
+  </div>
+</Teleport>
+```
+
+### 文件预览系统
+
+13 种格式的预览器在 `frontend-vue/src/components/file-preview/`：
+
+| 文件 | 作用 |
+| --- | --- |
+| `FilePreviewDialog.vue` | Dispatcher |
+| `ImagePreviewer.vue` | 图片 |
+| `AudioPreviewer.vue` | 音频 |
+| `VideoPreviewer.vue` | 视频 |
+| `PdfPreviewer.vue` | PDF（embed） |
+| `DocxPreviewer.vue` | DOCX（mammoth.js → HTML） |
+| `PptxPreviewer.vue` | PPTX（缩略图列表） |
+| `XlsxPreviewer.vue` | Excel（SheetJS） |
+| `CsvPreviewer.vue` | CSV |
+| `MarkdownPreviewer.vue` | Markdown |
+| `MermaidPreviewer.vue` | Mermaid |
+| `HtmlPreviewer.vue` | HTML（iframe sandbox） |
+| `TextPreviewer.vue` | Text |
+| `UnsupportedPreviewer.vue` | 后备（提示下载） |
+| `useFilePreview.ts` | Composable（`preview()` / `close()`） |
+| `filePreviewUtils.ts` | 工具（MIME 识别） |
+
+### ChatPanel
+
+`frontend-vue/src/components/ChatPanel.vue` —— SSE 流式对话：
+
+- 消息流（用户 / 助手 / 工具调用）
+- 工具调用可视化（`kg_add_node`、`kg_generate_note` 等图标）
+- 中断确认弹窗（删除节点时）
+- 会话历史切换
+
+### 弹窗列表
+
+| 弹窗 | 作用 |
+| --- | --- |
+| `NodeEditDialog.vue` | 编辑节点属性 |
+| `PlanDialog.vue` | 创建 / 编辑学习计划 |
+| `ResourceDialog.vue` | 资源管理 |
+| `AddAssociationDialog.vue` | 手动添加关联 |
+| `MemorySearchDialog.vue` | 会话记忆搜索 |
+| `TimelinePanel.vue` | 时间线查看 |
+| `FilePreviewDialog.vue` | 文件预览（dispatcher） |
+
+## Pinia Stores
+
+| Store | 状态 |
+| --- | --- |
+| `stores/graph.ts` | 当前领域、视图模式、图谱数据 |
+| `stores/chat.ts` | 会话 ID、消息流、SSE 状态 |
+| `stores/associations.ts` | 关联图数据 |
+
+## API 客户端
+
+`frontend-vue/src/api/index.ts`：
+
+```typescript
+const api = axios.create({ baseURL: '/api' })
+
+export const graphApi = {
+  listDomains: () => api.get('/domains').then(r => r.data),
+  getGraph: (domain: string) => api.get(`/graph/${domain}`).then(r => r.data),
+  addNode: (payload: AddNodeRequest) => api.post('/nodes', payload).then(r => r.data),
+  patchNode: (domain: string, name: string, patch: NodePatch) =>
+    api.patch(`/nodes/${domain}`, { ...patch, name }).then(r => r.data),
+  deleteNode: (domain: string, name: string) =>
+    api.delete(`/nodes/${domain}`, { params: { name } }).then(r => r.data),
+}
+```
+
+SSE 走原生 `fetch`（见 [SSE 流式对话](/guides/sse-chat)）。
+
+## 开发
+
+```bash
+cd frontend-vue
+npm install
+npm run dev          # → http://localhost:5175
+npm run build        # → dist/ （Docker 镜像会拷进 /app/static）
+npm run lint
+npm run type-check
+```
+
+Vite dev server 自动代理 `/api` → `http://localhost:8888`。
+
+## 构建产物进 Docker
+
+```bash
+cd frontend-vue && npm run build
+# 产物：frontend-vue/dist/
+# Dockerfile 多阶段构建会拷进 /app/static
+# FastAPI server.py 用 StaticFiles 挂载
+```
+
+详见 [Docker 部署](/deployment/docker)。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="SSE 流式对话" icon="stream" href="/guides/sse-chat">
+    前端怎么接 SSE
+  </Card>
+  <Card title="Docker 部署" icon="docker" href="/deployment/docker">
+    前端构建进镜像
+  </Card>
+</CardGroup>

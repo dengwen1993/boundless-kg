@@ -1,0 +1,115 @@
+---
+title: BoundlessKG
+description: "给定任意主题，自动生成可浏览、可检索、可对话的结构化知识图谱。"
+---
+
+[快速开始](/getting-started/installation) · [架构概览](/concepts/architecture) · [工具矩阵](/concepts/agent-system) · [API 速览](/api-reference/overview)
+
+## 它是什么
+
+BoundlessKG 是一个**生产级知识图谱策展引擎**——围绕一个领域主题，自动构建并持续维护一棵可演化的知识图谱。
+
+它不是单一行业的 demo，也不是单纯的 LLM 包装。它面向需要把**离散资料沉淀为可推理结构**的场景：学术综述、产品调研、技术决策树、跨领域学习路径……都能基于同一套引擎跑通。
+
+## 核心能力
+
+<Columns cols={3}>
+  <Card title="图谱生成" icon="diagram-project">
+    5 阶段流水线从主题自动产出节点 / 关系 / 子树。FalkorDB 主存 + 嵌入 / BM25 双通道混合检索。
+    [了解更多 →](/concepts/graph-model)
+  </Card>
+  <Card title="AI 策展助手" icon="robot">
+    deepagents 编排 + **53 个** LangChain 工具 + SSE 流式对话。意图驱动的提示词卡片中间件，行为可调可控。
+    [了解更多 →](/concepts/agent-system)
+  </Card>
+  <Card title="资料自动入图" icon="magnifying-glass">
+    上传文件 / 网页资料自动解析、分类、挂载到图谱节点；搜索后端失败自动隔离、成功自动加权。
+    [了解更多 →](/guides/resources)
+  </Card>
+</Columns>
+
+## 为什么选 BoundlessKG
+
+<AccordionGroup>
+  <Accordion title="LLM 无关，按角色分配模型" icon="layer-group">
+    Agent 聊天、图谱生成、笔记生成可以使用**三个不同的 LLM**。同一份 `.env` 既可以"MiniMax 聊 + DeepSeek 跑图谱"，也可以"agent 用 Claude + 生成用 GPT"。
+    [查看 LLM 集成 →](/integrations/llm-providers)
+  </Accordion>
+  <Accordion title="图存储 + 文件树双源真相" icon="database">
+    FalkorDB 持关联图与嵌入向量；文件系统持人类可读的领域数据。两者通过 `GraphSyncOrchestrator` 双向同步。任何一侧出问题时都能优雅降级。
+    [查看 FalkorDB 集成 →](/integrations/falkordb)
+  </Accordion>
+  <Accordion title="全链路可观测" icon="chart-line">
+    所有写操作通过 `ActivityBus` 自动发射事件，时间线、JSONL 日志、SSE 流都是同一份真相。不依赖反推文件系统重建历史。
+    [查看事件总线 →](/concepts/event-bus)
+  </Accordion>
+  <Accordion title="生产级分层架构" icon="sitemap">
+    `domain` 零 IO，靠 Protocol 反转依赖 `infrastructure`。新增 LLM / 搜索后端不需要改一行业务代码。
+    [查看架构 →](/concepts/architecture)
+  </Accordion>
+</AccordionGroup>
+
+## 5 分钟跑通
+
+<Steps>
+  <Step title="安装">
+    ```bash
+    git clone https://github.com/q85064972/boundless-kg.git boundless_kg && cd boundless_kg
+    python -m pip install -e ".[dev,deepagents]"
+    cp .env.example .env  # 填入至少一个 LLM 密钥
+    ```
+
+    > 📝 Apache License 2.0 — 自由使用、修改、分发，含专利授权。详见 [LICENSE](https://github.com/q85064972/boundless-kg/blob/main/LICENSE)。
+  </Step>
+  <Step title="启动后端">
+    ```bash
+    kg-engine serve
+    # → http://localhost:8888
+    ```
+  </Step>
+  <Step title="启动前端（可选）">
+    ```bash
+    cd frontend-vue && npm install && npm run dev
+    # → http://localhost:5175
+    ```
+  </Step>
+  <Step title="生成你的第一个领域">
+    ```bash
+    kg-engine generate "RAG 检索增强生成" --wait
+    ```
+    或者直接在前端聊天框里说："帮我创建一个名为 RAG 的领域图谱"。
+  </Step>
+</Steps>
+
+<Card title="准备好了？" icon="rocket" href="/getting-started/installation">
+  查看完整的安装与配置文档
+</Card>
+
+## 文档导览
+
+<CardGroup cols={2}>
+  <Card title="🚀 快速开始" icon="bolt" href="/getting-started/introduction">
+    5 分钟上手，含最小可用 `.env` 模板与三种启动方式。
+  </Card>
+  <Card title="🧠 核心概念" icon="brain" href="/concepts/architecture">
+    分层架构、数据模型、事件总线、Agent 系统——理解引擎怎么工作。
+  </Card>
+  <Card title="📖 使用指南" icon="book" href="/guides/generation-pipeline">
+    每个能力的实操指南：5 阶段流水线拆解、笔记、资源、计划、卡片、文件上传……
+  </Card>
+  <Card title="🔌 集成" icon="plug" href="/integrations/llm-providers">
+    LLM 提供方、搜索后端、FalkorDB、Embedding、前端、外部 Skills。
+  </Card>
+  <Card title="🛠 API 参考" icon="code" href="/api-reference/overview">
+    按 11 个子模块组织的完整 REST 接口文档。
+  </Card>
+  <Card title="🚢 部署" icon="docker" href="/deployment/docker">
+    Docker / WSL2 / 环境变量全集 / 生产建议 / 监控。
+  </Card>
+  <Card title="👨‍💻 开发" icon="terminal" href="/development/structure">
+    项目结构、设计原则、测试、新增工具 / Provider / Skill。
+  </Card>
+  <Card title="🍳 Cookbook" icon="utensils" href="/cookbook/academic">
+    学术 / 产品 / 技术决策等典型场景的端到端配方。
+  </Card>
+</CardGroup>

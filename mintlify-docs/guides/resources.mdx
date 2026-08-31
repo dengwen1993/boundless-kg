@@ -1,0 +1,162 @@
+---
+title: "资源管理"
+description: "Web 搜索 / 文件暂存 / 文件上传 / 13 种格式预览 / 学习资料归档"
+---
+
+## 三种资源形态
+
+| 形态 | 存储位置 | API 入口 |
+| --- | --- | --- |
+| **Web 资源** | `resources/&lt;node&gt;/web.json` | `/api/resources/.../web` |
+| **上传文件** | `resources/&lt;node&gt;/uploads/` | `/api/resources/.../upload` |
+| **学习资料** | `resources/&lt;node&gt;/study-materials/` | `/api/resources/.../study-materials` |
+
+## Web 资源
+
+### 数据模型
+
+```python
+class WebResource(BaseModel):
+    url: str
+    title: str
+    description: str | None
+    source: Literal["bocha", "ddg", "mmx", "manual"]
+    tags: list[str]
+    added_at: datetime
+    added_by: Literal["user", "agent"]
+```
+
+### API
+
+```http
+GET    /api/resources/{domain}?node=ColBERT
+POST   /api/resources/{domain}/web
+       {node, url, title, description, source, tags}
+DELETE /api/resources/{domain}/web?url=https://...
+PUT    /api/resources/{domain}/web?original_url=https://...
+       {url, title, ...}  # 用于替换（不丢失原 url 的引用计数）
+```
+
+### Agent 工具
+
+```python
+@tool
+async def kg_search_resources(domain: str, node: str, query: str) -> str:
+    """在指定节点下搜索 Web 资源，返回搜索结果供用户选择。"""
+
+@tool
+async def kg_view_resources(domain: str, node: str) -> str:
+    """查看节点下已有资源列表。"""
+
+@tool
+async def kg_add_learning_resources(domain: str, node: str, urls: list[str]) -> str:
+    """批量添加资源（Agent 通常在搜索后调用）。"""
+```
+
+## 文件上传
+
+### multipart 上传
+
+```bash
+curl -X POST http://localhost:8888/api/resources/rag/upload \
+  -F "node=ColBERT" \
+  -F "file=@/path/to/colbert.pdf"
+```
+
+**自动类型识别**：根据 MIME / 扩展名分到对应预览器（见 [文件预览](#文件预览)）。
+
+### 文件暂存（_staging/）
+
+上传文件时先到 `workspace/_staging/&lt;uuid&gt;__&lt;filename&gt;`，**用户未确认归档前不算正式资源**。
+
+```http
+POST /api/auto-place          # 把暂存文件分到节点
+POST /api/upload              # 上传到暂存
+GET  /api/list                # 列暂存文件
+GET  /api/parse/{filename}    # 解析（PDF/DOCX/PPTX → 文本）
+DELETE /api/{filename}        # 删暂存
+GET  /api/download/{filename} # 下载/预览
+```
+
+详见 [临时文件上传](/guides/uploads)。
+
+## 学习资料
+
+`study-materials/` 是另一种分类——属于"长期沉淀"的资料，不挂在具体节点下：
+
+```
+resources/&lt;domain&gt;/study-materials/
+├── RAG 综述.pdf
+├── ColBERT 论文.md
+└── 数据集/
+    └── mmarco.csv
+```
+
+```http
+GET /api/resources/{domain}/study-materials?path=数据集
+GET /api/resources/{domain}/study-materials/{filename:path}
+```
+
+## 文件预览（前端）
+
+13 种格式的预览器在 `frontend-vue/src/components/file-preview/`：
+
+| 格式 | 组件 | 后备 |
+| --- | --- | --- |
+| 图片 | `ImagePreviewer.vue` | — |
+| 音频 | `AudioPreviewer.vue` | — |
+| 视频 | `VideoPreviewer.vue` | — |
+| PDF | `PdfPreviewer.vue` | `&lt;embed&gt;` |
+| DOCX | `DocxPreviewer.vue` | mammoth.js → HTML |
+| PPTX | `PptxPreviewer.vue` | 缩略图列表 |
+| CSV | `CsvPreviewer.vue` | — |
+| Markdown | `MarkdownPreviewer.vue` | — |
+| Mermaid | `MermaidPreviewer.vue` | — |
+| HTML | `HtmlPreviewer.vue` | iframe sandbox |
+| Text | `TextPreviewer.vue` | — |
+| Excel | `XlsxPreviewer.vue` | SheetJS |
+| 其他 | `UnsupportedPreviewer.vue` | 下载提示 |
+
+**入口组件**：`FilePreviewDialog.vue`（dispatcher），根据 MIME/扩展名选择具体预览器。
+
+**Composables**：`useFilePreview.ts` 提供 `preview(file)` / `close()` 接口。
+
+## ResourceService
+
+`src/application/resource_service.py`：
+
+```python
+class ResourceService:
+    async def search_web(self, query: str, channel: str = "auto") -> list[SearchHit]:
+        """根据 KG_SEARCH_ADAPTIVE 决定自适应 / 固定链。"""
+        return await self.search_client.search(query, channel=channel)
+
+    async def add_web(self, domain: str, node: str, url: str, ...) -> WebResource: ...
+
+    async def stage_file(self, file: UploadFile) -> StagedFile: ...
+    async def classify_pending(self) -> Classification: ...
+    async def persist_resource(self, domain: str, node: str, staged: StagedFile): ...
+```
+
+## 故障排查
+
+| 症状 | 原因 | 处理 |
+| --- | --- | --- |
+| 上传 413 | 文件超过 `KG_API_*` 限制 | 调 `uvicorn --limit-max-requests` 或前端分片 |
+| 预览空白 | 浏览器无对应插件 | 走"下载"后备 |
+| Bocha 401 | API key 失效 | 临时切 DDG：`KG_SEARCH_ADAPTIVE=false` |
+| 暂存文件堆积 | 自动清理未跑 | 手动 `rm workspace/_staging/*` |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="临时文件上传与解析" icon="upload" href="/guides/uploads">
+    PDF/DOCX/PPTX 怎么解析、自动归类
+  </Card>
+  <Card title="学习计划" icon="list-check" href="/guides/plans">
+    PlanService + Action
+  </Card>
+  <Card title="搜索后端" icon="magnifying-glass" href="/integrations/search-backends">
+    Bocha / DDG / mmx 自适应链
+  </Card>
+</CardGroup>

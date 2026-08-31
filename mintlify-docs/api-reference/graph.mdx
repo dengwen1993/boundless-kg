@@ -1,0 +1,185 @@
+---
+title: "Graph & Nodes API"
+description: "图谱与节点完整接口"
+---
+
+## 列出所有领域
+
+```http
+GET /api/domains
+```
+
+**响应**：
+
+```json
+[
+  {
+    "id": "rag_检索增强生成",
+    "name": "RAG 检索增强生成",
+    "node_count": 47,
+    "edge_count": 86,
+    "quality_score": 0.78,
+    "quality_level": "good",
+    "updated_at": "2026-08-28T12:34:56Z"
+  }
+]
+```
+
+## 获取图谱
+
+```http
+GET /api/graph/{domain}
+```
+
+**响应**：
+
+```json
+{
+  "domain": "rag_检索增强生成",
+  "direction": {"angle": "technology", "audience": "expert", "depth": "comprehensive", "summary": "..."},
+  "nodes": [
+    {"name": "ColBERT", "tier": "L2", "summary": "...", "tags": ["late-interaction"], "parent": "后期交互"}
+  ],
+  "edges": [
+    {"source": "ColBERT", "target": "后期交互", "type": "parent", "weight": 1.0}
+  ],
+  "quality_score": {...},
+  "decorated_at": "2026-08-28T12:34:56Z"
+}
+```
+
+## 添加节点
+
+```http
+POST /api/nodes
+Content-Type: application/json
+
+{
+  "domain": "rag_检索增强生成",
+  "name": "ColBERTv2",
+  "parent": "ColBERT",
+  "summary": "ColBERT 的去残差 + 压缩版本",
+  "tags": ["late-interaction", "compression"]
+}
+```
+
+**响应 201**：
+
+```json
+{
+  "name": "ColBERTv2",
+  "tier": "L2",
+  "summary": "ColBERT 的去残差 + 压缩版本",
+  "tags": ["late-interaction", "compression"],
+  "parent": "ColBERT",
+  "created_at": "2026-08-28T12:34:56Z"
+}
+```
+
+## 更新节点
+
+```http
+PATCH /api/nodes/{domain}?name=ColBERT
+Content-Type: application/json
+
+{
+  "summary": "后期交互的代表模型",
+  "tags": ["late-interaction", "bert"]
+}
+```
+
+**注意**：节点名通过 `?name=` 传（不是路径参数）。
+
+## 删除节点
+
+```http
+DELETE /api/nodes/{domain}?name=ColBERTv2
+```
+
+**行为**：
+- 删除节点本身
+- 删除所有引用此节点的边
+- 迁移 / 清理关联资源（笔记 / 资源 / 计划 / 档案）
+- 触发 `NODE_DELETED` 事件
+
+**响应 204 No Content**
+
+## 修复反向链接
+
+```http
+POST /api/graph/{domain}/fix-links
+```
+
+**行为**：
+- 扫描所有 `parent` 边
+- 自动补齐反向 `child` 边
+- 处理命名冲突
+
+**响应**：
+
+```json
+{
+  "added_edges": 12,
+  "broken_edges": 3,
+  "renamed_nodes": 0
+}
+```
+
+## 导出为 ZIP
+
+```http
+GET /api/graph/{domain}/export-zip
+```
+
+返回 ZIP 流，包含：
+
+- `knowledge_graph.json`
+- `notes/`（全部笔记）
+- `resources/`（全部资源元数据）
+- `plans/`（全部计划）
+- `dossiers/`
+- `associations.json`
+- `README.md`（领域摘要）
+
+## 校验
+
+```http
+GET /api/graph/{domain}/validate
+```
+
+**响应**：
+
+```json
+{
+  "domain": "rag_检索增强生成",
+  "score": {
+    "connectivity": 0.92,
+    "balance": 0.78,
+    "link_completeness": 0.85,
+    "summary_coverage": 0.65,
+    "metadata_completeness": 0.81,
+    "reverse_link_completeness": 0.95,
+    "level": "good",
+    "overall": 0.83
+  },
+  "issues": [
+    {
+      "type": "summary_missing",
+      "severity": "warning",
+      "nodes": ["节点1", "节点2"],
+      "suggestion": "Run kg_generate_note for these nodes"
+    }
+  ]
+}
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Notes API" icon="note-sticky" href="/api-reference/notes">
+    笔记 CRUD + 生成
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api-reference/search">
+    全局混合检索
+  </Card>
+</CardGroup>

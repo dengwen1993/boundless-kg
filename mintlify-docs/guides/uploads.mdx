@@ -1,0 +1,200 @@
+---
+title: "临时文件上传与解析"
+description: "PDF / DOCX / PPTX / XLSX / CSV / HTML / Markdown 的暂存、解析、自动归类"
+---
+
+## 三步流程
+
+```mermaid
+flowchart LR
+  Upload["1️⃣ 上传<br/>POST /api/upload"] --> Stage["workspace/_staging/&lt;uuid&gt;__&lt;filename&gt;"]
+  Stage --> Parse["2️⃣ 解析<br/>GET /api/parse/{filename}"]
+  Parse --> AutoPlace["3️⃣ 自动归类<br/>POST /api/auto-place"]
+  AutoPlace --> Final["workspace/knowledge_bases/&lt;domain&gt;/resources/&lt;node&gt;/uploads/&lt;filename&gt;"]
+```
+
+## 支持的格式
+
+| 格式 | 解析器 | 实现 |
+| --- | --- | --- |
+| PDF | `pypdf` | `src/application/tmp_parser.py` |
+| DOCX | `markitdown[docx]` (主) / `zipfile` (后备) | 同上 |
+| PPTX | `markitdown[pptx]` (主) / `zipfile` (后备) | 同上 |
+| XLSX | `markitdown[xlsx]` | 同上 |
+| CSV | `csv` (stdlib) | 同上 |
+| HTML | `markitdown[html]` | 同上 |
+| Markdown | 直接读取 | 同上 |
+| Text | `chardet` 编码探测 | 同上 |
+
+## API
+
+### 1. 上传
+
+```bash
+curl -X POST http://localhost:8888/api/upload \
+  -F "file=@colbert.pdf"
+```
+
+返回：
+
+```json
+{
+  "staged_id": "abc123__colbert.pdf",
+  "filename": "colbert.pdf",
+  "size": 1234567,
+  "mime": "application/pdf",
+  "uploaded_at": "2026-08-28T12:34:56Z"
+}
+```
+
+### 2. 解析
+
+```bash
+curl http://localhost:8888/api/parse/colbert.pdf
+```
+
+返回：
+
+```json
+{
+  "filename": "colbert.pdf",
+  "parser": "pypdf",
+  "text": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction...\n\n1. Introduction\n...",
+  "char_count": 45231,
+  "page_count": 14,
+  "metadata": {
+    "title": "ColBERT: Efficient and Effective Passage Search...",
+    "authors": ["Omar Khattab", "Matei Zaharia"],
+    "year": 2020
+  }
+}
+```
+
+### 3. 自动归类
+
+```bash
+curl -X POST http://localhost:8888/api/auto-place \
+  -H "Content-Type: application/json" \
+  -d '{
+    "staged_id": "abc123__colbert.pdf",
+    "target": {
+      "domain": "rag_检索增强生成",
+      "node": "ColBERT"
+    }
+  }'
+```
+
+后端会：
+
+1. LLM 提取标题 / 关键词
+2. 匹配领域 + 节点（如不匹配则提示用户新建）
+3. 复制文件到 `resources/&lt;node&gt;/uploads/`
+4. 删 `_staging/` 原文件
+5. 触发 `ResourceService.persist_resource` → emit `RESOURCE_UPLOADED` 事件
+
+## 解析器实现
+
+`src/application/tmp_parser.py`：
+
+```python
+PARSERS = {
+    ".pdf":  _parse_pdf,
+    ".docx": _parse_docx,
+    ".pptx": _parse_pptx,
+    ".xlsx": _parse_xlsx,
+    ".csv":  _parse_csv,
+    ".html": _parse_html,
+    ".htm":  _parse_html,
+    ".md":   _parse_text,
+    ".txt":  _parse_text,
+}
+
+async def parse(filename: str) -> ParseResult:
+    suffix = Path(filename).suffix.lower()
+    parser = PARSERS.get(suffix, _parse_text)
+    try:
+        return await parser(staged_path(filename))
+    except Exception as e:
+        # markitdown 不可用时回退到 zipfile
+        if suffix in {".docx", ".pptx"}:
+            return await _parse_zipfile(staged_path(filename))
+        raise
+```
+
+**关键设计**：markitdown 不可用（CI 环境常见）时自动回退到 `zipfile` + 简易文本抽取，保证 DOCX/PPTX 解析可用。
+
+## 自动归类算法
+
+```python
+async def auto_place(staged_id: str, target: Target) -> PlaceResult:
+    parsed = await parse(staged_id)
+
+    # 1) 提取关键词（用 KG_GENERATION_LLM_PROVIDER）
+    keywords = await llm.extract_keywords(parsed.text[:4000])
+
+    # 2) 在领域内做混合检索
+    matches = await search_service.hybrid_search(
+        domain=target.domain,
+        query=" ".join(keywords),
+        top_k=5,
+    )
+
+    # 3) 评估匹配度
+    best = matches[0] if matches else None
+    confidence = best.score if best else 0.0
+
+    # 4) 决策
+    if confidence >= 0.7:
+        # 高置信度：自动归档到 best.node
+        await persist(target.domain, best.node, staged_id)
+        return PlaceResult(action="auto-placed", node=best.node, confidence=confidence)
+    elif confidence >= 0.4:
+        # 中置信度：让用户确认
+        return PlaceResult(
+            action="confirm",
+            candidates=[{"node": m.node, "score": m.score} for m in matches],
+        )
+    else:
+        # 低置信度：建议新建节点
+        return PlaceResult(action="suggest-new-node", suggested_name=keywords[0])
+```
+
+## Agent 工具
+
+```python
+@tool
+async def kg_list_uploaded_files() -> str:
+    """列出当前暂存区文件。"""
+
+@tool
+async def kg_parse_uploaded_file(filename: str) -> str:
+    """解析暂存文件为文本，返回前 N 字 + 元数据。"""
+
+@tool
+async def kg_delete_uploaded_file(filename: str) -> str:
+    """删除暂存文件。"""
+
+@tool
+async def kg_auto_place_uploaded_file(filename: str, domain: str, node: str) -> str:
+    """把暂存文件归档到指定节点。"""
+```
+
+## 故障排查
+
+| 症状 | 原因 | 处理 |
+| --- | --- | --- |
+| 解析返回空文本 | PDF 是扫描件（无文本层） | 加 OCR（pytesseract），不在 v1 范围 |
+| markitdown 报错 | 网络问题装不了 | 确认 `pip install 'markitdown[docx,pptx,xlsx]'` |
+| 自动归类归错节点 | LLM 理解偏差 | 显式传 `target.node` 覆盖 |
+| 暂存文件堆积 | 自动清理没跑 | 手动 `rm workspace/_staging/*` |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="资源管理" icon="paperclip" href="/guides/resources">
+    归档后的资源怎么管理
+  </Card>
+  <Card title="Embedding 混合检索" icon="magnifying-glass" href="/integrations/embedding">
+    自动归类用的混合检索
+  </Card>
+</CardGroup>

@@ -1,0 +1,168 @@
+---
+title: "环境变量全集"
+description: "所有 .env 变量详解 + 默认值 + 推荐值"
+---
+
+## 速查
+
+完整分组见下表。所有变量在 `src/config/settings.py` 定义，模板见项目根目录的 `.env.example`。
+
+## LLM
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_LLM_PROVIDER` | `mock` | Agent 聊天：`mock` / `minimax` / `deepseek` / `openai` |
+| `KG_GENERATION_LLM_PROVIDER` | （空 → 回退） | 图谱生成 / 笔记 / 资源分类 |
+| `KG_NOTE_LLM_PROVIDER` | （空 → 回退） | 仅笔记生成 |
+| `KG_LLM_TIMEOUT_SEC` | `300` | 单次 LLM HTTP 超时（秒） |
+| `KG_LLM_REASONING_EFFORT` | （空） | `low` / `medium` / `high` / `max` / `xhigh` |
+
+### MiniMax（Anthropic 兼容）
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | （空 → 必填） | API key |
+| `ANTHROPIC_BASE_URL` | `https://api.minimaxi.com/anthropic` | 兼容端点 |
+| `ANTHROPIC_MODEL` | `MiniMax-M3-512k` | 模型名 |
+
+### DeepSeek（OpenAI 兼容）
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `DEEPSEEK_API_KEY` | （空 → 必填） | API key |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | 端点 |
+| `DEEPSEEK_MODEL_CHAT` | `deepseek-chat` | 对话模型（快速） |
+| `DEEPSEEK_MODEL_V4` | `deepseek-v4-pro` | 推理模型（图谱生成） |
+
+## API
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_API_HOST` | `0.0.0.0` | FastAPI 监听 |
+| `KG_API_PORT` | `8888` | FastAPI 端口 |
+| `KG_API_CORS_ORIGINS` | `["http://localhost:5175"]` | CORS 白名单（JSON 数组或 CSV） |
+| `KG_API_DEBUG` | `false` | FastAPI debug 模式 |
+
+## Agent
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_AGENT_RECURSION_LIMIT` | `250` | deepagents 工具调用链深度 |
+| `KG_AGENT_THREAD_ID` | `default` | 默认 session 前缀 |
+| `KG_AGENT_INTERRUPT_ON_DELETE` | `true` | 删除节点前是否中断 |
+| `KG_AGENT_MEMORY_DIR` | `.agent_memory` | Agent 记忆目录 |
+| `KG_AGENT_CARDS_ENABLED` | `false` | 卡片中间件 |
+| `KG_AGENT_CARDS_DIR` | （空 → 内置） | 卡片目录覆盖 |
+| `KG_AGENT_CARDS_DEBUG` | `false` | SSE 流中暴露激活卡片 |
+| `KG_AGENT_SHELL_ENABLED` | `true` | 沙箱 shell |
+| `KG_AGENT_SHELL_TIMEOUT_SEC` | `300` | shell 默认超时 |
+
+## 路径
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_KB_ROOT` | `./workspace/knowledge_bases` | 知识库根 |
+| `KG_WORKSPACE_DIR` | `./workspace` | 工作区根 |
+
+**跨平台写法**：
+
+| 写法 | 例子 | 解析 |
+| --- | --- | --- |
+| POSIX 绝对 | `/app/workspace` | 原样使用 |
+| Windows 绝对 | `C:\workspace` | 原样使用 |
+| 相对 | `./workspace` | 解析为 `<CWD>/workspace` |
+
+## Search
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_SEARCH_MAX_CONCURRENCY` | `5` | 搜索并发 |
+| `KG_SEARCH_RATE_LIMIT_MS` | `300` | 速率限制（毫秒） |
+| `KG_SEARCH_ADAPTIVE` | `true` | 自适应后端选择 |
+| `KG_SEARCH_QUARANTINE_SEC` | `21600` | 失败后端隔离时长（秒，6h） |
+| `KG_SEARCH_BM25_WEIGHT` | `0.4` | BM25 权重 |
+| `KG_SEARCH_VECTOR_WEIGHT` | `0.6` | 向量权重 |
+| `KG_SEARCH_DEFAULT_TOP_K` | `10` | 默认返回数量 |
+
+### mmx-cli
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `MMX_API_KEY` | （空） | API key |
+| `MMX_REGION` | `cn` | 区域 |
+| `MMX_PROXY` | （空） | 代理 |
+
+### DuckDuckGo
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `DDG_PROXY` | （空 → 自动） | 显式代理；空则启动时探测 |
+
+### Bocha AI
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `BOCHA_API_KEY` | （空） | 空则静默跳过 |
+| `BOCHA_ENDPOINT` | `https://api.bochaai.com/v1/web-search` | 端点 |
+| `BOCHA_PROXY` | （空） | 代理 |
+| `BOCHA_TIMEOUT_SEC` | `15` | 单次超时 |
+| `BOCHA_COUNT` | `10` | 默认返回数 |
+
+## FalkorDB
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_FALKORDB_HOST` | `localhost` | 主机 |
+| `KG_FALKORDB_PORT` | `6379` | 端口 |
+| `KG_FALKORDB_PASSWORD` | （空） | 密码 |
+| `KG_FALKORDB_GRAPH_PREFIX` | `kg_` | 图前缀 |
+| `KG_FALKORDB_ENABLED` | `true` | 全局开关 |
+| `KG_ASSOCIATIONS_SOURCE` | `auto` | `auto` / `falkordb` / `json` |
+
+## Embedding
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_EMBEDDING_PROVIDER` | `api` | 后端（当前只支持 `api`） |
+| `KG_EMBEDDING_API_KEY` | （空） | API key |
+| `KG_EMBEDDING_BASE_URL` | `https://api.deepseek.com` | 兼容 OpenAI 嵌入端点 |
+| `KG_EMBEDDING_MODEL` | `text-embedding-v1` | 模型名 |
+| `KG_EMBEDDING_DIM` | `1024` | 向量维度 |
+| `KG_EMBEDDING_BATCH_SIZE` | `32` | 批量嵌入 |
+
+## Skills
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_SKILLS_DIR` | （空 → 内置） | Skills 目录 |
+| `KG_SKILL_PDF_ENABLED` | `true` | minimax-pdf 启用 |
+| `KG_SKILL_PDF_PATH` | （空 → 内置） | 路径覆盖 |
+| `KG_SKILL_PPTX_ENABLED` | `true` | pptx-generator 启用 |
+| `KG_SKILL_PPTX_PATH` | （空 → 内置） | 路径覆盖 |
+| `KG_SKILL_DOCX_ENABLED` | `true` | minimax-docx 启用 |
+| `KG_SKILL_DOCX_PATH` | （空 → 内置） | 路径覆盖 |
+| `KG_SKILL_TIMEOUT_SEC` | `600` | 子进程超时（秒） |
+
+## 日志
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `KG_LOG_FORMAT` | `json` | `json` / `console` |
+
+## 密钥缺失行为
+
+任何缺失的**必填**密钥都会以 `EnvironmentError` 抛出，**绝不**回退到源码硬编码。
+
+`config.require_secret(value, var_name)` 是统一入口。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="配置起步" icon="gear" href="/getting-started/configuration">
+    最小可用配置
+  </Card>
+  <Card title="生产部署" icon="server" href="/deployment/production">
+    生产建议
+  </Card>
+</CardGroup>

@@ -1,0 +1,157 @@
+---
+title: "学术综述图谱"
+description: "用 BoundlessKG 做一份可演化的研究综述"
+---
+
+## 场景
+
+> "我要写一篇 RAG 综述。需要把过去三年的论文组织起来，看清楚脉络，并且能持续更新。"
+
+传统做法：Notion / Word + 一堆文件夹。痛点：
+- 新论文来了不知道放哪
+- 关系靠人脑维护
+- 检索靠 Ctrl+F
+
+## 完整流程
+
+### 第 1 步：初始化领域
+
+```bash
+kg-engine generate "RAG 检索增强生成综述" \
+  --direction-hint=technology,expert,comprehensive \
+  --wait
+```
+
+CLI 会跑 5 阶段流水线，生成 L0/L1/L2 节点骨架（耗时 1-3 分钟）。
+
+### 第 2 步：补充核心论文
+
+通过前端聊天框：
+
+```text
+帮我在 RAG 领域添加以下节点（顶级综述）：
+- "Lewis 2020 RAG 原始论文"
+- "Gao 2023 Retrieval-Augmented Generation for Large Language Models: A Survey"
+- "Ma 2023 Query Rewriting for Retrieval-Augmented Large Language Models"
+```
+
+Agent 会调用 `kg_add_node` + `kg_generate_note` 给每个论文生成笔记。
+
+### 第 3 步：上传你的 PDF
+
+前端右侧 → "上传文件" → 拖入 PDF → 系统自动：
+
+1. 解析（pypdf 提取文本）
+2. LLM 抽取标题 / 作者 / 年份 / 关键词
+3. 匹配最相关的节点
+4. 归档到 `resources/&lt;node&gt;/uploads/`
+
+### 第 4 步：让 Agent 帮你关联
+
+```text
+根据我刚刚上传的 PDF，自动建立 Lewis 2020 跟 "稀疏检索"、"稠密检索"、
+"重排序" 这些节点之间的关联
+```
+
+Agent 会：
+1. 解析 PDF 文本
+2. 调用 `kg_view_associations` 看当前关联
+3. 调用 `kg_add_edge` 添加 PART_OF / PREREQUISITE_OF / SIMILAR_TO 等关系
+4. 触发 PendingNodesBuffer → 自动抽更多关联
+
+### 第 5 步：视图切换
+
+前端左侧"视图切换"：
+
+| 视图 | 看到什么 |
+| --- | --- |
+| **Graph** | D3 力导向，整体结构 |
+| **Outline** | Mermaid 大纲，论文串成线性综述 |
+| **Associations** | 关联图（PART_OF / 引用关系） |
+
+### 第 6 步：导出
+
+```bash
+# 整领域导出
+curl http://localhost:8888/api/graph/rag_检索增强生成/export-zip -o rag-review.zip
+```
+
+ZIP 包含：
+- `knowledge_graph.json`（完整图谱）
+- `notes/`（所有笔记 Markdown）
+- `resources/`（所有资源元数据）
+- `associations.json`（语义关联）
+- `README.md`（自动生成的摘要）
+
+### 第 7 步：写综述
+
+切换到 Outline 视图 → 看 Mermaid 大纲 → 复制 → 粘贴进你的论文。
+
+或者用 `kg_run_skill(skill="knowledge-digest", action="summarize", ...)` 让 LLM 写摘要初稿。
+
+## 持续维护
+
+新论文来了：
+
+```text
+新增 2024 年的 ColBERTv2 论文，关联到 "后期交互" 和 "ColBERT"
+```
+
+或者拖 PDF 进来让 Agent 自动处理。
+
+## 团队协作（多用户）
+
+如果团队共用一个 BoundlessKG 实例：
+
+1. 通过 nginx 暴露公网
+2. 每人独立 session_id（按前端 cookie）
+3. `.agent_memory/conversations/` 是个人历史（隔离）
+4. `knowledge_bases/` 是共享数据（协作）
+
+## 经验沉淀（Dossier）
+
+跑了一段时间后，每个节点都有档案：
+
+```text
+"ColBERT" 节点下：
+  [INSIGHT, weight=0.92] 在 50 万文档量级、英文为主时，召回比单塔高 12%
+  [GOTCHA, weight=0.81] 中文场景下需要额外分词处理
+  [PATTERN, weight=0.65] 与 BERT 的区别在"后期交互"环节
+```
+
+下次再问相关问题，Agent 会基于这些经验回答。
+
+## 调优建议
+
+| 场景 | 调优 |
+| --- | --- |
+| 想更快生成 | `KG_GENERATION_LLM_PROVIDER=deepseek`（DeepSeek 推理快） |
+| 想中文友好 | `KG_GENERATION_LLM_PROVIDER=minimax` |
+| 笔记太短 | 改 `NOTE_SYSTEM_PROMPT`（在 `src/domain/note/generator.py`） |
+| 关联太多噪音 | 提高 `KG_SEARCH_QUARANTINE_SEC` 或手动 `DELETE /api/associations/.../manual` |
+
+## 进阶：多领域对比
+
+建第二个领域：
+
+```bash
+kg-engine generate "Knowledge Distillation 综述" --wait
+```
+
+前端切换领域 → 看 "RAG" 和 "KD" 之间有没有共同节点（如 "Transformer"、"Self-supervised"）。
+
+或者通过 `/api/associations/{domain}/neighbors?node=Transformer&depth=3` 跨领域看。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="产品调研图谱" icon="briefcase" href="/cookbook/product">
+    横向对比产品特性
+  </Card>
+  <Card title="技术决策图谱" icon="code-branch" href="/cookbook/tech-decision">
+    候选方案横评
+  </Card>
+  <Card title="多领域适配" icon="shapes" href="/cookbook/multi-domain">
+    DomainPack 抽象
+  </Card>
+</CardGroup>

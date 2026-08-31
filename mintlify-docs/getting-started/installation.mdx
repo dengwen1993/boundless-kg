@@ -1,0 +1,97 @@
+---
+title: "安装"
+description: "BoundlessKG 的环境要求与安装步骤"
+---
+
+## 环境要求
+
+| 依赖 | 版本 | 说明 |
+| --- | --- | --- |
+| **Python** | ≥ 3.10 | 推荐 3.12（与 Dockerfile 一致） |
+| **Node.js** | ≥ 18 | 仅前端开发需要 |
+| **FalkorDB** | ≥ 1.0 | Docker 一行起，或用云服务；可选——不启也能跑（自动降级到 `associations.json`） |
+| **LLM 密钥** | — | 至少一个：MiniMax、DeepSeek，或任意 OpenAI 兼容端点 |
+
+### 系统要求
+
+| 维度 | 最低 | 推荐 |
+| --- | --- | --- |
+| **操作系统** | Linux / macOS / Windows (WSL2) | Linux / WSL2 |
+| **内存** | 2 GB | 4 GB+ |
+| **磁盘** | 1 GB（代码 + 依赖） | 5 GB+（含知识库 + FalkorDB 数据） |
+| **网络** | 需访问 LLM API | — |
+
+## 安装步骤
+
+### 1. 克隆与安装 Python 包
+
+```bash
+git clone https://github.com/q85064972/boundless-kg.git boundless_kg && cd boundless_kg
+
+# 基础安装
+python -m pip install -e .
+
+# 可选：开发依赖（pytest / ruff / mypy）
+python -m pip install -e ".[dev]"
+
+# 可选：Agent 依赖（deepagents / langchain / langgraph）
+python -m pip install -e ".[deepagents]"
+```
+
+### 2. 安装前端依赖（可选）
+
+```bash
+cd frontend-vue && npm install
+```
+
+### 3. 复制环境变量模板
+
+```bash
+cp .env.example .env
+```
+
+`.env` 已在 `.gitignore` 中，按需填写密钥。
+
+### 4. 启动 FalkorDB（可选，但推荐）
+
+```bash
+docker run -d --name falkordb -p 6379:6379 falkordb/falkordb:latest
+```
+
+不启也能跑：`KG_FALKORDB_ENABLED=false` 或 `KG_ASSOCIATIONS_SOURCE=json` 会自动降级。
+
+### 5. 验证安装
+
+```bash
+# 后端
+python -m src --version
+# → kg-engine 1.0.0
+
+# 前端（可选）
+cd frontend-vue && npm run build
+```
+
+## 故障排查
+
+<AccordionGroup>
+  <Accordion title="No module named kg_engine" icon="circle-xmark">
+    项目实际打包的包是 `src/`，控制台脚本名是 `kg-engine`。`python -m kg_engine` 不能用，必须用 `python -m src` 或 `kg-engine`（安装后）。
+  </Accordion>
+  <Accordion title="pydantic 版本冲突" icon="circle-xmark">
+    锁定 `pydantic>=2.6.0` / `pydantic-settings>=2.2.0`。如果你已有 `pydantic v1` 的项目依赖，建议用 venv 隔离。
+  </Accordion>
+  <Accordion title="FalkorDB 连不上" icon="circle-xmark">
+    1. 确认 `KG_FALKORDB_HOST:KG_FALKORDB_PORT` 与容器一致（默认 `localhost:6379`）
+    2. 设 `KG_ASSOCIATIONS_SOURCE=json` 临时降级
+    3. 看 `KG_LOG_LEVEL=DEBUG` 时的连接日志
+  </Accordion>
+  <Accordion title="前端 npm install 卡住" icon="circle-xmark">
+    大概率是 registry 慢。设 `npm config set registry https://registry.npmmirror.com` 重试。
+  </Accordion>
+</AccordionGroup>
+
+## 下一步
+
+<Card title="配置 .env" icon="gear" href="/getting-started/configuration">
+  按使用场景选择最小配置
+</Card>

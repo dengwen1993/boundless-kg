@@ -1,0 +1,163 @@
+---
+title: "笔记生成"
+description: "NoteService + NoteGenerator + 字数统计 + 子节点笔记索引"
+---
+
+## 数据模型
+
+每节点的笔记是单个 Markdown 文件：
+
+```text
+workspace/knowledge_bases/&lt;domain&gt;/notes/&lt;node&gt;.md
+```
+
+```markdown
+# ColBERT
+
+> 后期交互（Late Interaction）的代表模型之一。
+
+## 一句话定义
+ColBERT = BERT + 后期双塔交互，在检索质量和效率之间取得平衡。
+
+## 核心机制
+1. Query 与 Document 各自过 BERT 编码，得到 token-level 向量
+2. ...
+
+## 参考资源
+- [ColBERTv2 论文](https://arxiv.org/...)
+- ...
+
+---
+*generated: 2026-08-28 · prompt_version: v3 · llm: deepseek-v4-pro*
+```
+
+## API
+
+```http
+# 读取
+GET /api/notes/{domain}?node=ColBERT
+→ {content, exists: true} | {exists: false, needs_generation: true}
+
+# 保存（覆盖）
+PUT /api/notes/{domain}?node=ColBERT
+Content-Type: text/markdown
+<markdown body>
+
+# LLM 生成
+POST /api/notes/{domain}/generate?node=ColBERT
+→ {content, prompt_version, model}
+
+# 子节点笔记索引（用于左侧树快速展示）
+GET /api/notes-index/{domain}?node=后期交互
+→ [{name: "ColBERT", summary: "...", has_note: true}, ...]
+```
+
+## 实现
+
+### NoteService
+
+`src/application/note_service.py`：
+
+```python
+class NoteService:
+    async def get_or_generate(self, domain: str, node: str) -> Note:
+        note = await self.repo.read(domain, node)
+        if note is None:
+            note = await self.generator.generate(domain, node)
+            await self.repo.write(note)
+        return note
+
+    async def generate(self, domain: str, node: str) -> Note:
+        # 用 KG_NOTE_LLM_PROVIDER（默认回退到 KG_GENERATION_LLM_PROVIDER）
+        content = await self.generator.generate(...)
+        return Note(...)
+```
+
+### NoteGenerator
+
+`src/domain/note/generator.py`：
+
+```python
+class NoteGenerator:
+    PROMPT_VERSION = "v3"
+
+    async def generate(self, context: NoteContext) -> str:
+        prompt = build_prompt(context)  # 含节点 + 父节点 + 兄弟 + 关联资源
+        return await self.llm.chat(messages=prompt)
+```
+
+**关键设计**：
+- 提示词版本号写进文件 frontmatter，方便模型迭代追踪
+- 输入上下文包括节点 + 父节点 + 兄弟 + 关联资源，避免 LLM 凭空写
+- 失败时返回上一次成功内容（不报错）
+
+## Prompt 模板
+
+存放在 `src/domain/note/generator.py` 内的常量：
+
+```python
+NOTE_SYSTEM_PROMPT = """\
+你是一个领域笔记专家。根据给定的节点信息写一份结构化笔记。
+
+要求：
+1. 第一段是"一句话定义"，30 字以内
+2. 接下来 3-5 段核心机制 / 关键事实
+3. 列 3-5 条参考资源链接（如有）
+4. 末尾不写"以上"等冗余结尾
+
+风格：客观、第三人称、不带感情色彩。\
+"""
+```
+
+## 工具
+
+Agent 视角：
+
+```python
+@tool
+async def kg_generate_note(domain: str, node: str) -> str:
+    """为指定节点生成 / 重新生成笔记。会覆盖已有笔记。"""
+
+@tool
+async def kg_read_note(domain: str, node: str) -> str:
+    """读取节点笔记。"""
+
+@tool
+async def kg_list_notes(domain: str) -> str:
+    """列出该领域下所有有笔记的节点。"""
+```
+
+## 摘要提取
+
+`src/domain/note/text_utils.py`：
+
+```python
+def extract_first_definition_summary(text: str, max_chars: int = 80) -> str:
+    """从笔记首段提取一句话定义，用于节点 tooltip。"""
+
+def count_words(text: str) -> int:
+    """中英文混合字数统计。"""
+```
+
+## 故障排查
+
+| 症状 | 原因 | 处理 |
+| --- | --- | --- |
+| 笔记返回 502 | LLM 超时 | 调大 `KG_LLM_TIMEOUT_SEC` |
+| 笔记全是占位符 | LLM 没收到上下文 | 检查 `gather_graph_context()` 输出 |
+| 中英文混杂 | Prompt 没强制风格 | 在 `.env` 里写自定义系统提示词覆盖 |
+| 笔记格式破坏 | LLM 偶发 | `kg_repair_json` 兜底 |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="资源管理" icon="paperclip" href="/guides/resources">
+    资源搜索、暂存、上传、归档
+  </Card>
+  <Card title="学习计划" icon="list-check" href="/guides/plans">
+    PlanService + Action 状态机
+  </Card>
+  <Card title="节点档案" icon="user-secret" href="/guides/dossiers">
+    异步经验沉淀
+  </Card>
+</CardGroup>

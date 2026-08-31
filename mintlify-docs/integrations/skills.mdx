@@ -1,0 +1,133 @@
+---
+title: "外部 Skills"
+description: "minimax-pdf / pptx-generator / minimax-docx / knowledge-digest"
+---
+
+## 概览
+
+Skills 是**作为子进程调用的 CLI 工具**。Agent 通过 `kg_run_skill` 调用，把 skill 名称 + 参数传过去。
+
+```text
+src/skills/
+├── minimax-pdf/           # PDF 生成（封面 / 正文 / 合并）
+├── pptx-generator/        # PPT 生成
+├── minimax-docx/          # DOCX 生成 / 解析
+└── knowledge-digest/      # 知识摘要
+```
+
+## 调用方式
+
+### Agent
+
+```python
+@tool
+async def kg_run_skill(skill: str, action: str, params: dict) -> str:
+    """调用外部 Skill。
+    
+    skill: minimax-pdf | pptx-generator | minimax-docx | knowledge-digest
+    action: skill-specific
+    params: skill-specific
+    """
+```
+
+### 程序化
+
+```python
+from src.application.skill_runner import SkillRunner
+
+runner = SkillRunner()
+result = await runner.run(
+    skill="minimax-pdf",
+    action="merge",
+    params={"inputs": ["cover.pdf", "body.pdf"], "output": "final.pdf"},
+)
+```
+
+## Skill 详细
+
+### minimax-pdf
+
+`src/skills/minimax-pdf/`：
+
+| Action | 说明 | 关键参数 |
+| --- | --- | --- |
+| `cover` | 生成封面页 | `title`, `subtitle`, `palette` |
+| `render_body` | 渲染正文 | `markdown`, `palette`, `page_size` |
+| `merge` | 合并多 PDF | `inputs[]`, `output` |
+| `fill_inspect` | 检查 PDF 表单字段 | `pdf_path` |
+| `fill_write` | 填写 PDF 表单 | `pdf_path`, `values` |
+
+### pptx-generator
+
+`src/skills/pptx-generator/`：
+
+| Action | 说明 |
+| --- | --- |
+| `generate` | 从 markdown 大纲生成 PPT |
+| `template_apply` | 套用模板 |
+
+### minimax-docx
+
+`src/skills/minimax-docx/`：
+
+| Action | 说明 |
+| --- | --- |
+| `parse` | 解析 DOCX 为结构化文本 |
+| `generate` | 从 markdown 生成 DOCX |
+| `merge` | 合并多个 DOCX |
+
+### knowledge-digest
+
+`src/skills/knowledge-digest/`：
+
+| Action | 说明 |
+| --- | --- |
+| `summarize` | 对领域图谱生成摘要报告 |
+| `export` | 导出为多种格式（HTML / PDF / DOCX） |
+
+## 配置
+
+```bash .env
+KG_SKILLS_DIR=                       # 空 = &lt;repo&gt;/src/skills
+KG_SKILL_PDF_ENABLED=true
+KG_SKILL_PDF_PATH=                   # 覆盖默认路径
+KG_SKILL_PPTX_ENABLED=true
+KG_SKILL_PPTX_PATH=
+KG_SKILL_DOCX_ENABLED=true
+KG_SKILL_DOCX_PATH=
+KG_SKILL_TIMEOUT_SEC=600             # 子进程超时（Chromium 慢）
+```
+
+## 添加新 Skill
+
+详见 [添加新 Skill](/development/add-skill)。
+
+## 超时与重试
+
+```bash .env
+KG_SKILL_TIMEOUT_SEC=600
+```
+
+- 超时后子进程被 SIGKILL
+- 默认不重试（PDF 生成通常幂等但慢）
+- 失败信息写日志：`workspace/_pipeline/skills/&lt;run_id&gt;.log`
+
+## 故障排查
+
+| 症状 | 原因 |
+| --- | --- |
+| Skill not found | `KG_SKILL_*_ENABLED=false` 或路径不对 |
+| Chrome 启动失败 | PPT 生成需要 Chromium；Docker 镜像已装，本地可能要装 |
+| 超时 | 调大 `KG_SKILL_TIMEOUT_SEC`；首次运行 Chromium 冷启动慢 |
+| 输出乱码 | locale 问题，Docker 镜像已配 `LANG=en_US.UTF-8` |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="添加新 Skill" icon="plus" href="/development/add-skill">
+    怎么扩展 Skill 目录
+  </Card>
+  <Card title="Agent 系统" icon="robot" href="/concepts/agent-system">
+    SkillsMiddleware 在 middleware 链中的位置
+  </Card>
+</CardGroup>

@@ -1,0 +1,181 @@
+---
+title: "Uploads API"
+description: "临时文件上传 / 解析 / 自动归类"
+---
+
+## 上传到暂存区
+
+```http
+POST /api/upload
+Content-Type: multipart/form-data
+
+file=@/path/to/colbert.pdf
+```
+
+**响应 201**：
+
+```json
+{
+  "staged_id": "abc123__colbert.pdf",
+  "filename": "colbert.pdf",
+  "size": 1234567,
+  "mime": "application/pdf",
+  "uploaded_at": "2026-08-28T12:34:56Z"
+}
+```
+
+**存储**：`workspace/_staging/&lt;staged_id&gt;`
+
+## 列出暂存文件
+
+```http
+GET /api/list
+```
+
+**响应**：
+
+```json
+{
+  "items": [
+    {
+      "staged_id": "abc123__colbert.pdf",
+      "filename": "colbert.pdf",
+      "size": 1234567,
+      "mime": "application/pdf",
+      "uploaded_at": "2026-08-28T12:34:56Z"
+    }
+  ]
+}
+```
+
+## 解析暂存文件
+
+```http
+GET /api/parse/{filename}
+```
+
+**支持格式**：PDF / DOCX / PPTX / XLSX / CSV / HTML / Markdown / Text
+
+**响应（PDF）**：
+
+```json
+{
+  "filename": "colbert.pdf",
+  "parser": "pypdf",
+  "text": "ColBERT: Efficient and Effective Passage Search...\n\n1. Introduction\n...",
+  "char_count": 45231,
+  "page_count": 14,
+  "metadata": {
+    "title": "ColBERT: Efficient...",
+    "authors": ["Omar Khattab", "Matei Zaharia"],
+    "year": 2020
+  },
+  "truncated": false
+}
+```
+
+**响应（DOCX）**：
+
+```json
+{
+  "filename": "notes.docx",
+  "parser": "markitdown",
+  "text": "...",
+  "char_count": 12345,
+  "metadata": {
+    "title": "...",
+    "paragraph_count": 42,
+    "image_count": 3
+  }
+}
+```
+
+## 自动归类
+
+```http
+POST /api/auto-place
+Content-Type: application/json
+
+{
+  "staged_id": "abc123__colbert.pdf",
+  "target": {
+    "domain": "rag_检索增强生成",
+    "node": "ColBERT"
+  }
+}
+```
+
+**响应（高置信度）**：
+
+```json
+{
+  "action": "auto-placed",
+  "domain": "rag_检索增强生成",
+  "node": "ColBERT",
+  "confidence": 0.92,
+  "path": "workspace/knowledge_bases/rag_检索增强生成/resources/ColBERT/uploads/colbert.pdf"
+}
+```
+
+**响应（中置信度，让用户确认）**：
+
+```json
+{
+  "action": "confirm",
+  "candidates": [
+    {"node": "ColBERT", "score": 0.65},
+    {"node": "BM25", "score": 0.52}
+  ]
+}
+```
+
+**响应（低置信度，建议新建）**：
+
+```json
+{
+  "action": "suggest-new-node",
+  "suggested_name": "LateInteraction",
+  "reasoning": "文档主要讲后期交互，与现有节点都不匹配"
+}
+```
+
+## 下载暂存文件
+
+```http
+GET /api/download/{filename}
+```
+
+返回文件流。
+
+## 删除暂存文件
+
+```http
+DELETE /api/{filename}
+```
+
+## 错误码
+
+| HTTP | 含义 |
+| --- | --- |
+| 400 | filename 非法（含 `..`） |
+| 404 | 暂存文件不存在 |
+| 413 | 文件过大 |
+| 415 | 不支持的 MIME |
+| 422 | 解析失败 |
+
+## 自动清理
+
+`workspace/_staging/` 下超过 7 天的文件会被 ActivityBus 后台任务清理。
+
+详见 [数据落盘契约 → tmp 自动清理](/concepts/workspace#tmp-自动清理)。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="临时文件指南" icon="book" href="/guides/uploads">
+    解析器实现细节
+  </Card>
+  <Card title="Resources API" icon="paperclip" href="/api-reference/resources">
+    归档后的资源管理
+  </Card>
+</CardGroup>

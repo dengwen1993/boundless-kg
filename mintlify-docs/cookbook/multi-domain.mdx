@@ -1,0 +1,249 @@
+---
+title: "多领域适配（DomainPack）"
+description: '把 BoundlessKG 从「学习」领域扩展到小说 / 论文 / 食谱'
+---
+
+> ⚠️ **DomainPack 是 v1.2 路线图中的功能，尚未实现。** 本文描述的是设计方向与架构草案，不是当前可用的功能。文中的代码路径和 CLI 参数均为设计草案，实际实现可能有所不同。
+
+## 场景
+
+BoundlessKG v1 围绕"学习"主题：节点是概念、关系是知识结构、笔记是解释。
+
+要复用同一套引擎到：
+- **小说创作**：节点是角色 / 场景 / 事件，关系是叙事线
+- **论文管理**：节点是论文 / 作者 / 引用，关系是引用图
+- **食谱整理**：节点是菜品 / 食材 / 技法，关系是组合
+
+## DomainPack 抽象
+
+每个领域需要配置：
+
+| 维度 | 学习（默认） | 小说 | 论文 |
+| --- | --- | --- | --- |
+| L0 | 主题 | 书名 | 论文标题 |
+| L1 | 一级概念 | 主要角色 / 场景 | 章节 / 主要观点 |
+| L2 | 实体 / 技术 | 具体情节 / 事件 | 段落 / 公式 |
+| 关系类型 | parent (树) | appears_with / precedes / references | cites / extends / contradicts |
+| 笔记风格 | 客观解释 | 叙事片段 + 视角标注 | 摘要 + 关键贡献 |
+| 资源类型 | web / paper | chapter / character_card | pdf / bibtex |
+
+## 实施步骤
+
+### 1. 创建 DomainPack
+
+```python  # 设计草案 — src/domain/packs/novel.py（尚未实现）
+from dataclasses import dataclass
+
+@dataclass
+class NovelDomainPack:
+    """小说创作领域包。"""
+
+    l0_label = "书名"
+    l1_labels = ["主要角色", "场景", "章节"]
+    l2_label = "情节 / 事件"
+
+    tier_rules = {
+        "L0": "书名 / 系列名",
+        "L1": "出现 ≥3 次的角色、场景、章节",
+        "L2": "具体情节、对白、动作",
+    }
+
+    # 关系类型
+    relation_types = [
+        ("appears_with", "同场景出现"),
+        ("precedes", "时间顺序"),
+        ("references", "引用 / 回溯"),
+        ("contrasts_with", "对照"),
+    ]
+
+    # 笔记模板
+    note_prompt = """\
+    你是一个小说编辑。基于节点信息写一段叙事卡片。
+
+    要求：
+    1. 第一段：角色定位（30 字内）
+    2. 核心特质：3-5 个 bullet
+    3. 标志性场景 / 台词：1-2 个
+    4. 人物关系：与哪些角色有重要关系
+
+    风格：第三人称、客观、不剧透关键情节
+    """
+
+    # 资源分类
+    resource_categories = [
+        "chapter", "character_card", "worldbuilding_doc",
+        "dialogue_log", "plot_outline",
+    ]
+```
+
+### 2. 注册 DomainPack
+
+```python  # 设计草案 — src/domain/packs/__init__.py（尚未实现）
+from .novel import NovelDomainPack
+from .academic import AcademicDomainPack  # v1 默认
+from .recipe import RecipeDomainPack
+
+PACKS = {
+    "academic": AcademicDomainPack(),  # 默认
+    "novel": NovelDomainPack(),
+    "recipe": RecipeDomainPack(),
+}
+
+
+def get_pack(pack_name: str = "academic") -> DomainPack:
+    return PACKS.get(pack_name, PACKS["academic"])
+```
+
+### 3. 让 CLI 支持 pack 参数
+
+```bash  # 设计草案 — src/cli/main.py（尚未实现）
+generate_parser.add_argument(
+    "--pack",
+    default="academic",
+    choices=["academic", "novel", "recipe"],
+    help="DomainPack name",
+)
+
+# generate 命令
+domain_pack = get_pack(args.pack)
+graph = await pipeline.run(topic=args.topic, domain_pack=domain_pack, ...)
+```
+
+### 4. 让 Agent 知道当前 pack
+
+`src/agent/system_prompt.py`：
+
+```python
+SYSTEM_PROMPT = """\
+你正在帮助用户管理一个 {pack_name} 领域。
+
+当前领域包规则：
+{pack_rules}
+
+可用工具：所有 kg_* 工具，但请按 pack 的语义使用。
+"""
+```
+
+动态注入：
+
+```python
+pack = get_pack(current_pack_name)
+system_prompt = SYSTEM_PROMPT.format(
+    pack_name=pack_name,
+    pack_rules=json.dumps(pack.tier_rules, ensure_ascii=False, indent=2),
+)
+```
+
+### 5. 笔记生成按 pack 走
+
+```python  # 设计草案 — src/application/note_service.py（尚未实现）
+class NoteService:
+    async def generate(self, domain: str, node: str) -> Note:
+        pack = get_pack_for_domain(domain)  # 从 KG_ASSOCIATIONS_SOURCE 类似机制读
+        prompt = pack.note_prompt + "\n\n节点信息：\n" + node_context
+        content = await self.llm.chat(messages=[{"role": "system", "content": prompt}, ...])
+        return Note(content=content, ...)
+```
+
+### 6. 资源分类按 pack 走
+
+`src/domain/resource/categories.py`：
+
+```python
+DEFAULT_CATEGORIES_BY_PACK = {
+    "academic": ["paper", "article", "doc", "video", "code", "dataset"],
+    "novel": ["chapter", "character_card", "worldbuilding_doc", "dialogue_log", "plot_outline"],
+    "recipe": ["recipe_card", "ingredient_list", "technique_video", "menu"],
+}
+```
+
+## 完整示例：小说创作
+
+### CLI
+
+```bash
+# 用 novel pack 创领域
+kg-engine generate "三体 - 地球往事" --pack=novel --direction-hint=theory,expert,comprehensive --wait
+
+# 切到 novel pack 后，kg_add_node 行为变化
+# 节点 tier 语义：L0=书名, L1=角色/场景, L2=情节
+```
+
+### Agent 对话
+
+```text
+帮我在"三体 - 地球往事"下面建主要角色节点：
+- 叶文洁
+- 伊文斯
+- 史强
+
+每个生成一段人物卡片（200 字）
+```
+
+Agent 会调用 `kg_add_node` + `kg_generate_note`，**使用 NovelDomainPack 的 prompt**。
+
+### 笔记示例
+
+```markdown
+# 叶文洁
+
+> 物理学家，"地球往事"主线人物。
+
+## 角色定位
+清华大学天体物理教授，红岸基地关键人物。
+
+## 核心特质
+- 在文革中失去父亲，对人性悲观
+- 坚信人类需要外部力量拯救
+- 极强的科学理性与道德困境并存
+
+## 标志性场景
+- 红岸基地向太阳发射信号
+- 三体组织创立仪式
+
+## 人物关系
+- 与伊文斯：精神继承者
+- 与史强：直接对抗
+
+---
+*generated: 2026-08-28 · pack: novel · prompt_version: v1*
+```
+
+## 渐进式迁移
+
+不需要一次性完成所有 pack：
+
+1. **v1.0**：默认 academic pack 跑通
+2. **v1.1**：加 novel pack（笔记 prompt + 资源分类 + 关系类型）
+3. **v1.2**：加 recipe pack（可能涉及不同的"图谱生成"算法）
+4. **v1.3**：用户自定义 pack（配置文件驱动）
+
+每加一个 pack，都是**新增代码**而非**修改现有代码**——这就是 DomainPack 抽象的价值。
+
+## 数据迁移
+
+```bash
+# 老数据（academic pack）保持不变
+workspace/knowledge_bases/&lt;old_domain&gt;/
+
+# 新数据（novel pack）独立目录
+workspace/knowledge_bases/&lt;new_domain&gt;/
+
+# 元数据标记
+workspace/knowledge_bases/&lt;new_domain&gt;/.pack.json
+{"pack": "novel", "version": "v1"}
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="数据模型" icon="diagram-project" href="/concepts/graph-model">
+    Graph / Node / Direction
+  </Card>
+  <Card title="关联图" icon="share-nodes" href="/concepts/association-model">
+    跨领域关系
+  </Card>
+  <Card title="添加新 Skill" icon="plus" href="/development/add-skill">
+    怎么扩展能力
+  </Card>
+</CardGroup>

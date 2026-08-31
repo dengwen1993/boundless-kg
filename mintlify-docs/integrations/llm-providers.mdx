@@ -1,0 +1,169 @@
+---
+title: "LLM 提供方"
+description: "Anthropic 兼容 / OpenAI 兼容 / Mock，三层角色可独立配置"
+---
+
+## 三层 LLM 角色
+
+BoundlessKG 把 LLM 用法分成**三个角色**，每个角色可独立配置：
+
+| 角色 | 用途 | 配置 | 回退链 |
+| --- | --- | --- | --- |
+| **Agent 聊天** | `/api/agent/invoke` 跑对话 | `KG_LLM_PROVIDER` | — |
+| **图谱生成** | 5 阶段流水线 / 笔记 / 资源分类 | `KG_GENERATION_LLM_PROVIDER` | → `KG_LLM_PROVIDER` |
+| **笔记生成** | 仅 `NoteService.generate` | `KG_NOTE_LLM_PROVIDER` | → `KG_GENERATION_LLM_PROVIDER` → `KG_LLM_PROVIDER` |
+
+**典型用法**：agent 聊天用 MiniMax（图谱理解强），生成用 DeepSeek（推理快 + 中文好）。
+
+## 支持的提供方
+
+### mock（默认）
+
+无密钥，离线可用，**确定性输出**（同输入同输出）。
+
+```bash .env
+KG_LLM_PROVIDER=mock
+```
+
+**适用场景**：测试、CI、离线开发、不想烧钱的 demo。
+
+### minimax（Anthropic 兼容）
+
+```bash .env
+ANTHROPIC_API_KEY=sk-...
+ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
+ANTHROPIC_MODEL=MiniMax-M3-512k
+KG_LLM_PROVIDER=minimax
+```
+
+**适用场景**：中文 + 长上下文（512k）。
+
+### deepseek（OpenAI 兼容）
+
+```bash .env
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL_CHAT=deepseek-chat
+DEEPSEEK_MODEL_V4=deepseek-v4-pro
+KG_LLM_PROVIDER=deepseek
+```
+
+**适用场景**：图谱生成、推理密集型任务。`chat` 模型快速，`v4-pro` 推理更强。
+
+### openai（任意 OpenAI 兼容端点）
+
+```bash .env
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://your-proxy.com/v1
+OPENAI_MODEL=gpt-4o
+KG_LLM_PROVIDER=openai
+```
+
+**适用场景**：自托管、第三方代理、其他 OpenAI 兼容服务。
+
+### 任意自定义（LLMClientProtocol）
+
+参考 [添加新 LLM Provider](/development/add-provider)。
+
+## 实现
+
+`src/infrastructure/llm/factory.py`：
+
+```python
+def get_llm_client(provider: str) -> AsyncLLMClient:
+    if provider == "mock":
+        return MockLLMClient()
+    if provider == "minimax":
+        return AnthropicCompatClient(
+            api_key=get_minimax_api_key(),
+            base_url=get_minimax_base_url(),
+            model=get_minimax_model(),
+        )
+    if provider == "deepseek":
+        return OpenAICompatClient(
+            api_key=get_deepseek_api_key(),
+            base_url=get_deepseek_base_url(),
+            model=get_deepseek_v4_model(),
+        )
+    if provider == "openai":
+        return OpenAICompatClient(
+            api_key=get_openai_api_key(),
+            base_url=get_openai_base_url(),
+            model=get_openai_model(),
+        )
+    raise ValueError(f"unknown provider: {provider}")
+```
+
+`src/domain/protocols.py::LLMClientProtocol` 定义接口，**所有客户端都靠结构化子类型满足**。
+
+## 思考配置
+
+控制推理模型深度：
+
+```bash .env
+KG_LLM_REASONING_EFFORT=low
+```
+
+可选值：`low` / `medium` / `high` / `max` / `xhigh`
+
+**注意**：空 = 不发送该参数（provider default）。**注意**：reasoning-mandatory 模型（`deepseek-v4-flash`）架构本身就强制推理，此参数只能调深度不能完全关。
+
+## 超时与重试
+
+```bash .env
+KG_LLM_TIMEOUT_SEC=600        # 默认 300
+```
+
+`src/infrastructure/llm/_retry.py` 自动处理：
+
+- HTTP 429 / 5xx → 指数退避重试（3 次）
+- 401 / 403 → 不重试，立即报错
+- 超时 → 重试 1 次后放弃
+
+## 拆分策略示例
+
+```bash .env
+# Agent 用 MiniMax（中文 + 长上下文）
+ANTHROPIC_API_KEY=sk-mmx-...
+KG_LLM_PROVIDER=minimax
+
+# 生成用 DeepSeek（推理 + 中文）
+DEEPSEEK_API_KEY=sk-ds-...
+KG_GENERATION_LLM_PROVIDER=deepseek
+
+# 笔记单独用 deepseek-chat（更快）
+KG_NOTE_LLM_PROVIDER=deepseek
+
+# 思考深度
+KG_LLM_REASONING_EFFORT=medium
+```
+
+## 验证
+
+```bash
+# 检查每个角色的 provider 解析
+python -c "
+from src.config import (
+    get_llm_provider,
+    get_generation_llm_provider,
+    get_note_llm_provider,
+)
+print('agent:', get_llm_provider())
+print('generation:', get_generation_llm_provider())
+print('note:', get_note_llm_provider())
+"
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="搜索后端" icon="magnifying-glass" href="/integrations/search-backends">
+    Bocha / DDG / mmx 自适应链
+  </Card>
+  <Card title="FalkorDB 集成" icon="database" href="/integrations/falkordb">
+    图存储怎么换 / 怎么降级
+  </Card>
+  <Card title="添加新 LLM Provider" icon="plus" href="/development/add-provider">
+    自定义 protocol 实现
+  </Card>
+</CardGroup>

@@ -1,0 +1,156 @@
+---
+title: "Agent API"
+description: "SSE 流式对话 + 会话管理"
+---
+
+## 流式调用 Agent
+
+```http
+POST /api/agent/invoke
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "message": "帮我在 ColBERT 下面加一个 LateInteraction 子节点",
+  "session_id": "user-123-session-abc"
+}
+```
+
+返回 `text/event-stream`，每帧是 SSE 格式的 JSON 对象。
+
+### SSE 帧类型
+
+详见 [SSE 流式对话 → 帧格式](/guides/sse-chat#sse-帧格式)。
+
+| type | 含义 |
+| --- | --- |
+| `token` | LLM 流式输出 |
+| `tool_call` | Agent 决定调工具 |
+| `tool_result` | 工具返回 |
+| `tool_error` | 工具异常 |
+| `cards_debug` | 激活卡片（需 `KG_AGENT_CARDS_DEBUG=true`） |
+| `interrupt` | 请求用户确认 |
+| `done` | 结束 |
+| `error` | 致命错误 |
+
+### 完整示例
+
+```bash
+curl -N -X POST http://localhost:8888/api/agent/invoke \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "message": "列出所有领域",
+    "session_id": "user-123"
+  }'
+```
+
+```text
+event: message
+data: {"type":"token","content":"我来"}
+
+event: message
+data: {"type":"token","content":"帮你"}
+
+event: tool
+data: {"type":"tool_call","tool":"kg_list_domains","args":{}}
+
+event: tool_result
+data: {"type":"tool_result","tool":"kg_list_domains","result":"[\"rag_检索增强生成\",...]"}
+
+event: token
+data: {"type":"token","content":"当前有 X 个领域..."}
+
+event: done
+data: {"type":"done","session_id":"user-123","tokens":234,"duration_ms":1234}
+```
+
+## 创建新会话
+
+```http
+POST /api/agent/session
+Content-Type: application/json
+
+{
+  "initial_context": {"domain": "rag_检索增强生成"}
+}
+```
+
+**响应**：
+
+```json
+{
+  "session_id": "user-123-session-xyz",
+  "created_at": "2026-08-28T12:34:56Z"
+}
+```
+
+## 中断控制
+
+### Agent 请求中断
+
+```json
+{
+  "type": "interrupt",
+  "prompt": "我打算删除节点 ColBERT，因为它是过时论文的引用。是否继续？",
+  "expected_response": "yes | no"
+}
+```
+
+**客户端流程**：
+
+1. 显示确认框
+2. 用户输入后用**同一 session_id** 再次 POST `/api/agent/invoke`
+3. message 是 "yes" 或 "no"
+4. Agent 从中断点继续
+
+### 客户端主动取消
+
+```typescript
+const controller = new AbortController()
+fetch('/api/agent/invoke', { signal: controller.signal, ... })
+
+// 取消
+controller.abort()
+```
+
+后端会收到断连，自动清理。
+
+## 会话查询
+
+详见 [Memory API](/api-reference/memory)。
+
+## 工具列表（53）
+
+详见 [Agent 系统 → 工具目录](/concepts/agent-system#工具目录53-个按域分组)。
+
+## 配置
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_AGENT_RECURSION_LIMIT` | `250` | 工具调用链最大深度 |
+| `KG_AGENT_THREAD_ID` | `default` | 默认 session 前缀 |
+| `KG_AGENT_INTERRUPT_ON_DELETE` | `true` | 删除节点前中断 |
+| `KG_AGENT_CARDS_ENABLED` | `false` | 卡片中间件 |
+| `KG_AGENT_CARDS_DEBUG` | `false` | SSE 流中暴露激活卡片 |
+| `KG_AGENT_SHELL_ENABLED` | `true` | 沙箱 shell |
+| `KG_AGENT_SHELL_TIMEOUT_SEC` | `300` | shell 默认超时 |
+
+## 错误码
+
+| HTTP | 含义 |
+| --- | --- |
+| 400 | 请求体非法 |
+| 503 | Agent 未构建完成（`agent_build_status: building`） |
+| 504 | LLM 调用超时 |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="SSE 流式对话指南" icon="stream" href="/guides/sse-chat">
+    帧格式 + 前端接入
+  </Card>
+  <Card title="Agent 系统概念" icon="robot" href="/concepts/agent-system">
+    middleware 链 + 工具目录
+  </Card>
+</CardGroup>

@@ -1,0 +1,108 @@
+---
+title: "启动"
+description: "三种启动方式：控制台脚本、uvicorn、Docker Compose"
+---
+
+## 方式 A：控制台脚本（推荐本地开发）
+
+```bash
+kg-engine serve
+```
+
+> `kg-engine` 是 `pyproject.toml` 中定义的 console script，
+> 入口在 `src/cli/main.py`。
+
+### 关键 CLI 子命令速览
+
+```bash
+kg-engine serve                       # 启动 API（等同 uvicorn）
+kg-engine generate "&lt;topic&gt;" --wait   # 5 阶段生成（阻塞直到完成）
+kg-engine validate &lt;domain_id&gt;        # 校验 + 6 维质量评分
+kg-engine report  &lt;domain_id&gt;         # 打印图谱 + 报告
+
+# 提示词卡片
+kg-engine cards list
+kg-engine cards add &lt;id&gt; --title "..." --body "..."
+kg-engine cards delete &lt;id&gt;
+kg-engine cards view &lt;id&gt;
+
+# 关联图
+kg-engine associations sync        &lt;domain&gt;
+kg-engine associations sync-node   &lt;domain&gt; &lt;node&gt;
+kg-engine associations extract     &lt;domain&gt;
+kg-engine associations stats       &lt;domain&gt;
+kg-engine associations clear       &lt;domain&gt;
+```
+
+## 方式 B：uvicorn（开发热重载）
+
+```bash
+python -m uvicorn src.api.server:create_app \
+  --factory \
+  --host 0.0.0.0 \
+  --port 8888 \
+  --reload
+```
+
+> ⚠️ **必须 `--factory`**，否则 lifespan 不触发，deepagents 不会预构建，ActivityBus 不会启动。
+> 任何 `create_app` 模式的启动命令都适用此约束。
+
+## 方式 C：Docker Compose（生产部署）
+
+### 1. 构建前端
+
+```bash
+cd frontend-vue && npm run build && cd ..
+```
+
+### 2. 启动服务
+
+```bash
+docker compose up -d --build
+```
+
+服务列表：
+- `api` —— 后端 FastAPI（默认 8888）
+- `falkordb` —— 图数据库（默认 6379）
+- 持久化卷：`kb-data`
+
+访问：
+- 前端 UI（由 `api` 容器托管）：&lt;http://localhost:8888&gt;
+- Swagger：&lt;http://localhost:8888/docs&gt;
+
+完整步骤见 [Docker 部署](/deployment/docker)。
+
+## 前端 dev server（可选）
+
+后端跑起来后，如果要改前端：
+
+```bash
+cd frontend-vue && npm run dev
+# → http://localhost:5175
+# Vite 会自动代理 /api → http://localhost:8888
+```
+
+## 验证启动
+
+```bash
+curl http://localhost:8888/api/health
+# 期望返回 JSON，包含 agent_build_status 字段
+```
+
+```bash
+curl http://localhost:8888/api/domains
+# 期望返回领域列表（首次启动为空）
+```
+
+## 进程信号
+
+| 信号 | 行为 |
+| --- | --- |
+| `SIGINT` / `SIGTERM` | 触发 FastAPI lifespan 关闭：flush activity log、cancel background tasks |
+| `SIGUSR1` | 触发 `reload_settings()`（仅 dev mode） |
+
+## 下一步
+
+<Card title="Hello World" icon="rocket" href="/getting-started/hello-world">
+  生成你的第一个领域图谱
+</Card>

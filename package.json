@@ -1,0 +1,9 @@
+{
+  "name": "kg-engine",
+  "version": "1.0.0",
+  "description": "Knowledge Graph Engine — Playwright dependency for PDF cover rendering",
+  "private": true,
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}

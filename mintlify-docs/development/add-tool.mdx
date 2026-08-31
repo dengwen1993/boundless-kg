@@ -1,0 +1,220 @@
+---
+title: "添加新 LangChain 工具"
+description: "在 src/agent/tools/ 加一个 @tool 并通过工具数守护测试"
+---
+
+## 工具必须满足的契约
+
+1. 用 `@tool` 装饰器（langchain-core）
+2. 函数签名清晰，参数有类型注解
+3. docstring 是给 LLM 看的（说明何时用、参数含义、返回值）
+4. 通过 `agent/dependencies.py` 拿服务（**不要直接 new**）
+5. 写操作后 emit ActivityBus 事件
+6. **必须** 在对应工具文件的 `__all__` 里导出，并被 `src/agent/tools/__init__.py` 聚合
+
+## 步骤 1：选文件 / 新建文件
+
+`src/agent/tools/` 下按域分组。新增域就新建文件（如 `analytics_tools.py`）。
+
+**现有 16 个文件**：
+
+```text
+graph_tools.py         note_tools.py         resource_tools.py
+search_tools.py        search_channel_tools.py  search_bocha_tool.py
+staging_tools.py       pipeline_tools.py     plan_tools.py
+timeline_tools.py      card_tools.py         json_repair_tool.py
+memory_tools.py        association_tools.py  dossier_tools.py
+tmp_file_tools.py
+```
+
+## 步骤 2：写工具函数
+
+例：加一个 `kg_search_github_code` 工具。
+
+```python src/agent/tools/search_tools.py
+from langchain_core.tools import tool
+
+from src.agent.dependencies import get_search_service
+
+
+@tool
+async def kg_search_github_code(
+    query: str,
+    language: str = "python",
+    top_k: int = 10,
+) -> str:
+    """在 GitHub 上搜索代码片段。
+
+    适用场景：用户想找某个库的使用例子、某个 API 的典型调用方式。
+
+    Args:
+        query: 搜索关键词，如 "ColBERT retrieval"
+        language: 限定语言（python / javascript / go / ...）
+        top_k: 返回结果数，默认 10
+
+    Returns:
+        Markdown 格式的代码片段列表，每项包含 repo / path / snippet / stars
+    """
+    service = get_search_service()
+    hits = await service.search_github(query=query, language=language, top_k=top_k)
+
+    if not hits:
+        return "未找到匹配的代码片段。"
+
+    lines = ["## GitHub 代码搜索结果\n"]
+    for h in hits:
+        lines.append(f"### [{h.repo}/{h.path}]({h.url})")
+        lines.append(f"⭐ {h.stars} · {h.language}\n")
+        lines.append(f"```{h.language}")
+        lines.append(h.snippet)
+        lines.append("```\n")
+    return "\n".join(lines)
+```
+
+**关键点**：
+
+- `get_search_service()` —— 通过依赖注入拿，**不要 `SearchService()` 直接 new**
+- docstring 第一段是"一句话用途"（LLM 决定何时调用的关键）
+- 错误情况返回自然语言（不要 raise，Agent 要能 handle）
+- 返回 Markdown 而不是 JSON（前端展示友好）
+
+## 步骤 3：导出到 `__all__`
+
+如果新建文件，加到 `__init__.py`：
+
+```python src/agent/tools/__init__.py
+from .search_tools import kg_search_github_code  # 新增
+
+__all__ = [
+    # ... 原有 ...
+    "kg_search_github_code",  # 新增
+]
+```
+
+如果新增到现有文件，确保 `__all__` 也包含。
+
+## 步骤 4：通过工具数守护测试
+
+```bash
+pytest tests/unit/test_tool_count_consistency.py -q
+```
+
+如果新加了工具，**这个测试会失败**，需要更新 expected count：
+
+```python tests/unit/test_tool_count_consistency.py
+def test_tool_count():
+    from src.agent.tools import ALL_TOOLS
+    assert len(ALL_TOOLS) == 54  # 从 53 改为 54
+```
+
+## 步骤 5：写单元测试
+
+`tests/unit/test_search_tools.py`：
+
+```python
+import pytest
+from src.agent.tools import kg_search_github_code
+
+
+@pytest.fixture
+def mock_service(monkeypatch):
+    class MockService:
+        async def search_github(self, query, language, top_k):
+            return [
+                type("Hit", (), {
+                    "repo": "stanford-futuredata/ColBERT",
+                    "path": "examples/search.py",
+                    "url": "https://github.com/...",
+                    "stars": 1200,
+                    "language": "python",
+                    "snippet": "from colbert import Searcher\nsearcher = Searcher(...)",
+                })()
+            ]
+
+    from src.agent import dependencies
+    monkeypatch.setattr(dependencies, "get_search_service", lambda: MockService())
+
+
+async def test_kg_search_github_code_returns_markdown(mock_service):
+    result = await kg_search_github_code.ainvoke({
+        "query": "ColBERT retrieval",
+        "language": "python",
+    })
+    assert "ColBERT" in result
+    assert "```python" in result
+    assert "⭐ 1200" in result
+
+
+async def test_kg_search_github_code_no_results(mock_service, monkeypatch):
+    class EmptyService:
+        async def search_github(self, **kwargs):
+            return []
+    from src.agent import dependencies
+    monkeypatch.setattr(dependencies, "get_search_service", lambda: EmptyService())
+
+    result = await kg_search_github_code.ainvoke({"query": "nonexistent"})
+    assert "未找到" in result
+```
+
+## 步骤 6：可选 — 中间件考虑
+
+如果工具涉及：
+
+| 场景 | 需要考虑 |
+| --- | --- |
+| 长时间操作 | 加超时（`KG_LLM_TIMEOUT_SEC` 风格） |
+| 用户确认 | 用 WriteClaimMiddleware 拦 |
+| 频繁触发 | 加防抖（PendingNodesBuffer 风格） |
+| 异步后台任务 | `asyncio.create_task` + 异常隔离 |
+
+## 完整示例：可工作的工具
+
+```python src/agent/tools/analytics_tools.py
+from __future__ import annotations
+
+from langchain_core.tools import tool
+
+from src.agent.dependencies import get_graph_service
+
+
+@tool
+async def kg_graph_stats(domain: str) -> str:
+    """获取图谱统计信息。
+
+    适用场景：用户问"我的 RAG 图谱有多少节点？质量怎么样？"
+
+    Args:
+        domain: 领域 ID
+
+    Returns:
+        Markdown 格式的统计报告
+    """
+    service = get_graph_service()
+    stats = await service.compute_stats(domain)
+
+    return f"""# {domain} 图谱统计
+
+| 维度 | 数值 |
+| --- | --- |
+| 节点数 | {stats.node_count} |
+| 边数 | {stats.edge_count} |
+| L0 根节点 | {stats.l0_count} |
+| L1 子主题 | {stats.l1_count} |
+| L2 实体 | {stats.l2_count} |
+| 平均子节点数 | {stats.avg_children:.2f} |
+| 质量分 | {stats.quality_score:.2f} ({stats.quality_level}) |
+"""
+```
+
+注册到 `__init__.py` + 更新 `test_tool_count_consistency.py` + 写测试。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="添加新 LLM Provider" icon="plug" href="/development/add-provider">
+    实现 LLMClientProtocol
+  </Card>
+  <Card title="Agent 系统" icon="robot" href="/concepts/agent-system">
+    53 个工具全貌
+  </Card>
+</CardGroup>

@@ -1,0 +1,199 @@
+---
+title: "监控与日志"
+description: "structlog / ActivityBus / SSE 暴露的可观测性"
+---
+
+## 三层观测
+
+| 层 | 数据源 | 适用 |
+| --- | --- | --- |
+| **L1 业务事件** | ActivityBus → JSONL | 业务回溯（"上次改了啥"） |
+| **L2 应用日志** | structlog（json / console） | 排查问题 |
+| **L3 运行时指标** | `/api/health` + 进程指标 | 告警 |
+
+## L1：业务事件（ActivityBus）
+
+详见 [事件总线与时间线](/concepts/event-bus)。
+
+```bash
+# 看最近的图谱事件
+tail -f workspace/.agent_memory/activity/rag_检索增强生成/2026-08-28.jsonl | jq .
+
+# 过滤 NODE_UPDATED
+tail -f workspace/.agent_memory/activity/rag_检索增强生成/2026-08-28.jsonl \
+  | jq 'select(.event_type | startswith("NODE"))'
+
+# 查某天的失败
+jq 'select(.event_type | endswith("_FAILED"))' \
+  workspace/.agent_memory/activity/rag_检索增强生成/2026-08-28.jsonl
+```
+
+**常见事件类型**：
+
+| 类型 | 含义 |
+| --- | --- |
+| `NODE_*` | 图谱变更 |
+| `NOTE_*` | 笔记变更 |
+| `RESOURCE_*` | 资源变更 |
+| `PLAN_*` | 计划变更 |
+| `ASSOCIATION_*` | 关联图变更 |
+| `PIPELINE_*` | 5 阶段流水线状态 |
+| `DOSSIER_*` | 节点档案变更 |
+
+## L2：应用日志
+
+`src/observability/logging_config.py`：
+
+```python
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer()  # 或 PrettyConsole
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(get_log_level()),
+)
+```
+
+### 配置
+
+```bash .env
+KG_LOG_LEVEL=INFO            # DEBUG / INFO / WARNING / ERROR
+KG_LOG_FORMAT=json           # json / console
+```
+
+### JSON 格式（生产）
+
+```json
+{
+  "timestamp": "2026-08-28T12:34:56.789Z",
+  "level": "info",
+  "event": "node_added",
+  "domain": "rag_检索增强生成",
+  "node": "ColBERT",
+  "trace_id": "..."
+}
+```
+
+### Console 格式（开发）
+
+```text
+2026-08-28T12:34:56 [INFO] node_added domain=rag_检索增强生成 node=ColBERT trace_id=...
+```
+
+### 集成
+
+**Loki**（推荐）：
+
+```yaml docker-compose.monitoring.yml
+services:
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - /var/log/boundless-kg:/var/log
+    command: -config.file=/etc/promtail/config.yml
+
+  loki:
+    image: grafana/loki:latest
+    ports: ["3100:3100"]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+```
+
+**ELK / Splunk**：把 `KG_LOG_FORMAT=json` 输出到 stdout，交给 filebeat 收集。
+
+## L3：运行时指标
+
+### 健康检查
+
+```bash
+curl http://localhost:8888/api/health | jq .
+```
+
+```json
+{
+  "status": "ok",
+  "agent_build_status": "ready",
+  "falkordb_healthy": true,
+  "uptime_sec": 12345,
+  "version": "1.0.0"
+}
+```
+
+### 自定义指标（v1.1 计划）
+
+`/api/metrics`（Prometheus 格式）：
+
+```
+# HELP kg_domains_total Total number of domains
+# TYPE kg_domains_total gauge
+kg_domains_total 5
+
+# HELP kg_nodes_total Total number of nodes across all domains
+# TYPE kg_nodes_total gauge
+kg_nodes_total 234
+
+# HELP kg_agent_active_sessions Active Agent sessions
+# TYPE kg_agent_active_sessions gauge
+kg_agent_active_sessions 3
+
+# HELP kg_pipeline_runs_total Pipeline runs by status
+# TYPE kg_pipeline_runs_total counter
+kg_pipeline_runs_total{status="completed"} 12
+kg_pipeline_runs_total{status="failed"} 1
+```
+
+### 进程级
+
+| 指标 | 工具 |
+| --- | --- |
+| CPU / 内存 | `docker stats` |
+| 磁盘 IO | `iostat` |
+| 网络 | `nethogs` |
+
+## 关键告警规则
+
+| 告警 | 表达式 | 阈值 |
+| --- | --- | --- |
+| API 不可达 | `kg_up == 0` | 立即 |
+| FalkorDB 失联 | `kg_falkordb_healthy == 0` | 5 min |
+| Agent 构建卡住 | `kg_agent_build_status == 0` | 10 min |
+| 流水线频繁失败 | `rate(kg_pipeline_runs_total{status="failed"}[1h]) > 0.1` | — |
+| 磁盘空间 | `node_filesystem_avail / node_filesystem_size < 0.1` | 立即 |
+| 内存使用 | `container_memory_usage_bytes > 80%` | 5 min |
+
+## 调试清单
+
+```bash
+# 1. API 健康
+curl http://localhost:8888/api/health
+
+# 2. 看最近日志
+docker compose logs --tail=100 -f api
+
+# 3. 业务事件
+tail -50 workspace/.agent_memory/activity/&lt;domain&gt;/$(date +%F).jsonl | jq .
+
+# 4. FalkorDB 健康
+docker compose exec falkordb redis-cli ping
+
+# 5. 磁盘 / 内存
+df -h workspace/
+free -h
+
+# 6. 进程
+ps aux | grep uvicorn
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="生产部署" icon="server" href="/deployment/production">
+    多副本 / 备份 / HA
+  </Card>
+  <Card title="事件总线" icon="timeline" href="/concepts/event-bus">
+    业务事件订阅
+  </Card>
+</CardGroup>

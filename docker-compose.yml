@@ -1,0 +1,63 @@
+services:
+  # FalkorDB — graph database for hybrid BM25 + vector search.
+  # Stores concept/note/resource nodes + semantic edges (PART_OF,
+  # REFERENCES, etc.). Each domain gets its own graph (kg_{domain}).
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb_data:/var/lib/falkordb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${KG_API_PORT:-8888}:8888"
+    env_file: .env
+    environment:
+      # Override .env for Docker: FalkorDB is a companion service
+      KG_FALKORDB_HOST: falkordb
+      KG_FALKORDB_PORT: "6379"
+      # Proxy: inside the container, 127.0.0.1 is the container's own
+      # loopback — NOT the Windows host where Clash listens. Route the
+      # proxy through host.docker.internal so DDG (and any other HTTP
+      # client using HTTP(S)_PROXY) can reach the host's Clash port.
+      # Requires Clash's "Allow LAN" toggle to be on, and the listener
+      # bound to 0.0.0.0 rather than 127.0.0.1 alone.
+      DDG_PROXY: http://host.docker.internal:7897
+      SEARCH_PROXY: http://host.docker.internal:7897
+      HTTP_PROXY: http://host.docker.internal:7897
+      HTTPS_PROXY: http://host.docker.internal:7897
+      NO_PROXY: falkordb,localhost,127.0.0.1
+    extra_hosts:
+      # Make ``host.docker.internal`` resolvable inside the container.
+      # ``host-gateway`` is the user-defined network alias that points
+      # at the host's gateway IP — works on Docker Desktop (Win/Mac)
+      # and Docker Engine ≥ 20.10.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    volumes:
+      # Bind-mount the agent workspace into the container so domain
+      # data (./workspace/knowledge_bases) and operational artefacts
+      # (./workspace/_pipeline, ./workspace/.agent_memory, …) all
+      # survive container restarts.
+      - ./workspace:/app/workspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  falkordb_data:

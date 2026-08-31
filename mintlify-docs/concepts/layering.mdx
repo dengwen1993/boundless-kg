@@ -1,0 +1,162 @@
+---
+title: "分层与依赖反转"
+description: "每层的边界、职责、为什么这样切"
+---
+
+## 为什么分层
+
+单文件 + 单字典的 demo 跑通三阶段后，自然会遇到这些问题：
+
+- 想换 LLM 提供方，业务代码被牵连
+- 路由层开始直接读文件，单元测试要建一堆 fixture
+- 领域逻辑和 IO 耦合，没法纯函数测试
+- 想复用"图谱生成"到别的领域，牵扯一坨学习场景的代码
+
+BoundlessKG 的分层方案就是为了解决这四件事。
+
+## 依赖方向铁律
+
+```text
+api / cli / agent  →  application  →  domain
+                                    ↑
+                  infrastructure ──┘  (实现 domain Protocol 接口)
+```
+
+- `domain` 是依赖收敛点
+- `infrastructure` 知道 `domain`，但反过来不行
+- `application` 知道 `domain` 和 `infrastructure` 的接口，但不知道具体实现类
+- `api` / `cli` / `agent` 只知道 `application`
+
+## 每层做什么
+
+### api（`src/api/`）
+
+**职责**：HTTP 协议适配、请求/响应 schema、middleware、CORS、SSE 流式。
+
+**典型文件**：
+- `routes/graph.py` —— 图谱相关 REST 端点
+- `routes/agent.py` —— `/api/agent/invoke` SSE 流
+- `routes/memory.py` —— 会话记忆读取
+- `server.py` —— `create_app()` 工厂 + lifespan（预构建 deepagents、启动 ActivityBus 写入循环）
+
+**不允许**：
+- 直接 `open()` 文件
+- 直接调用 LLM SDK
+- 实现业务规则（应下沉到 application）
+
+### cli（`src/cli/`）
+
+**职责**：argparse 子命令、参数校验、调用 application 服务。
+
+**典型子命令**：
+- `serve`、`generate`、`validate`、`report`、`cards`、`associations`
+
+**关键约束**：业务逻辑全部下沉。CLI 只做"解析 → 调用 service → 打印结果"。
+
+### agent（`src/agent/`）
+
+**职责**：deepagents 编排、工具注册、middleware 链、SSE 流出。
+
+**典型文件**：
+- `orchestrator.py` —— `create_deep_agent()`
+- `tools/*.py` —— **53 个** LangChain `@tool`
+- `cards/` —— 意图驱动的提示词卡片
+- `skills_setup.py` —— SkillsMiddleware 接入外部 CLI
+- `shell_sandbox.py` —— `kg_shell_exec` 沙箱
+- `reflection/dossier_reflector.py` —— 节点档案异步反思
+
+**关键约束**：工具函数**不直接做文件 IO**——必须调 `agent/dependencies.py` 里的 `get_*_service()` 单例。
+
+### application（`src/application/`）
+
+**职责**：业务流程编排、跨 Repository 协调、事件发射、状态机管理。
+
+**典型服务**：
+
+| 服务 | 职责 |
+| --- | --- |
+| `GraphService` | 图谱 CRUD、校验、评分 |
+| `NoteService` | 笔记获取/生成、缓存策略 |
+| `ResourceService` | 资源搜索、暂存、分类、归档 |
+| `PlanService` | 学习计划 + Action 状态机 |
+| `TimelineService` | 时间线聚合（只读） |
+| `GenerationPipeline` | 5 阶段流水线 |
+| `AssociationService` | 语义关联抽取 |
+| `DossierService` | 节点档案 |
+| `CardService` | 提示词卡片文件 CRUD |
+| `GraphSyncOrchestrator` | 双向同步：文件系统 ↔ FalkorDB |
+
+**关键约束**：
+- 持有的是 Repository / Protocol，不持有具体实现类
+- 写操作后必须 `await ActivityBus.emit(...)`
+
+### domain（`src/domain/`）
+
+**职责**：纯业务模型、算法、校验。零 IO。
+
+**子模块**：
+
+| 子模块 | 内容 |
+| --- | --- |
+| `graph/models.py` | `Graph` / `Node` / `Direction` / `QualityScore` / `DomainSummary` |
+| `graph/validator.py` | 6 维度质量评分 |
+| `graph/decorator.py` | 层级装饰（`decorate_graph`、`node_tier`、`infer_hierarchy`） |
+| `graph/link_fixer.py` | 反向链接修复 |
+| `graph/association.py` | `Association` / `AssociationGraph` / `RelationType` |
+| `graph/dossier.py` | `Dossier` / `DossierEntry` |
+| `note/generator.py` | `NoteGenerator` |
+| `note/text_utils.py` | 字数统计、摘要提取 |
+| `intent/parser.py` | 三采样投票意图解析器 |
+| `hot_keyword/extractor.py` | 关键词抽取 |
+| `protocols.py` | `LLMClientProtocol` / `SearchClientProtocol` / `WikiClientProtocol` |
+
+**铁律**：测试 `tests/unit/test_domain_*.py` 守护这一层不引入 IO。
+
+### infrastructure（`src/infrastructure/`）
+
+**职责**：所有 IO 实现，包括文件系统、第三方 SDK、原子写、锁。
+
+**子模块**：
+
+| 子模块 | 内容 |
+| --- | --- |
+| `repository/*.py` | 7 个 Repository，原子写 `_atomic.py` |
+| `llm/openai_compat.py` | DeepSeek / 任意 OpenAI 兼容端点 |
+| `llm/anthropic_compat.py` | MiniMax / 任意 Anthropic 兼容端点 |
+| `llm/mock.py` | 确定性 mock（测试 / 离线开发） |
+| `llm/factory.py` | 按 env 选 provider |
+| `search/bocha.py` / `mmx.py` / `preference.py` | 搜索后端 + 自适应调度 |
+| `embedding/client.py` / `bm25.py` | Embedding + BM25 混合 |
+| `graph_store/client.py` | FalkorDB 包装 |
+| `wiki/client.py` | Wikipedia REST |
+| `lock.py` | per-event-loop 异步锁 |
+| `pipeline_state_store.py` | 流水线状态持久化（重启可恢复） |
+| `build_log.py` | 领域构建日志 |
+
+## 关键模式
+
+### 依赖注入（FastAPI）
+
+`src/api/dependencies.py` 用 `@lru_cache` 单例化 Repository / Service：
+
+```python
+@lru_cache(maxsize=1)
+def get_graph_service() -> GraphService:
+    return GraphService(repo=get_graph_repository())
+```
+
+路由层通过 `Depends(get_graph_service)` 注入。测试用 `monkeypatch.setattr` 替换。
+
+### Protocol 注入
+
+`agent/dependencies.py` 同模式，但因为不通过 FastAPI，是直接模块级单例。
+
+### 单仓双包（库 + CLI）
+
+`pyproject.toml` 里 `packages.find` 配置成 `include=["src*"]`——所以 `src/` 整体被打成 `src` 包；`src/__main__.py` 是 `python -m src` 入口；`kg-engine` 是 console script。
+
+## 下一步
+
+<Card title="知识图谱数据模型" icon="diagram-project" href="/concepts/graph-model">
+  Graph / Node / Direction 字段含义
+</Card>

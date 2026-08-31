@@ -1,0 +1,204 @@
+---
+title: "Search API"
+description: "BM25 + 向量混合检索 + FalkorDB 图遍历"
+---
+
+## 域内混合检索
+
+```http
+GET /api/search/{domain}?q=ColBERT&top_k=10
+```
+
+**查询参数**：
+
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `q` | 是 | — | 检索关键词（min_length=1） |
+| `top_k` | 否 | `10` | 上限 1–50 |
+
+**响应**：
+
+```json
+{
+  "query": "ColBERT",
+  "domain": "rag_检索增强生成",
+  "results": [
+    {
+      "type": "node",
+      "name": "ColBERT",
+      "summary": "后期交互的代表模型",
+      "tags": ["late-interaction"],
+      "score": 0.92,
+      "score_breakdown": {
+        "bm25": 0.78,
+        "vector": 0.95,
+        "rrf": 0.92
+      },
+      "highlight": "ColBERT 是后期交互的代表模型..."
+    },
+    {
+      "type": "resource",
+      "url": "https://arxiv.org/...",
+      "title": "ColBERT: Efficient...",
+      "score": 0.81
+    }
+  ],
+  "total": 12
+}
+```
+
+**实现**：RRF 融合 BM25（中文按字符 bigram，英文按词）+ 向量余弦。
+
+## 域内全局检索（含 1 跳邻居）
+
+```http
+GET /api/search/{domain}/global?q=后期交互&top_k=10
+```
+
+**查询参数**：
+
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `q` | 是 | — | 检索关键词 |
+| `top_k` | 否 | `10` | 上限 1–30 |
+
+**响应**：hybrid results + 1 跳 FalkorDB 邻居，供 Agent 做大规模规划用。
+
+## 邻居检索（FalkorDB 图遍历）
+
+```http
+GET /api/graph/{domain}/neighbors?node=ColBERT&hops=2
+```
+
+**查询参数**：
+
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `node` | 是 | — | 节点名（可包含 `/`） |
+| `hops` | 否 | `1` | 跳数上限 1–5 |
+
+**响应**：
+
+```json
+{
+  "domain": "rag_检索增强生成",
+  "node": "ColBERT",
+  "hops": 2,
+  "neighbors": [
+    {
+      "name": "ColBERTv2",
+      "relation": "is_a",
+      "weight": 1.0,
+      "hops": 1
+    },
+    {
+      "name": "后期交互",
+      "relation": "part_of",
+      "weight": 0.9,
+      "hops": 2
+    }
+  ]
+}
+```
+
+> 关联图侧的等效端点 `/api/associations/{domain}/neighbors?node=&hops=&relation=&direction=any` 支持 `relation` 过滤与 `direction=any|out|in`。
+
+## 关联图统计（FalkorDB）
+
+```http
+GET /api/graph/{domain}/statistics
+```
+
+**响应**：
+
+```json
+{
+  "node_count": 47,
+  "edge_count": 86,
+  "concept_count": 23,
+  "resource_count": 18,
+  "embedding_count": 47,
+  "embedding_coverage": 1.0,
+  "falkordb_healthy": true
+}
+```
+
+## 重建索引
+
+### 全量
+
+```http
+POST /api/graph/{domain}/sync
+```
+
+**行为**：
+
+1. 读 `knowledge_graph.json` + notes + resources
+2. 重建 BM25 索引
+3. 批量 Embedding
+4. 写 FalkorDB
+
+**响应**：
+
+```json
+{
+  "nodes_indexed": 47,
+  "resources_indexed": 18,
+  "embeddings_created": 65,
+  "duration_ms": 12345
+}
+```
+
+### 单节点
+
+```http
+POST /api/graph/{domain}/sync-node?node=ColBERT
+```
+
+**查询参数**：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `node` | 是 | 节点名（可包含 `/`） |
+
+## 关联图侧检索（替代/补充）
+
+如需带 `relation` / `direction` 过滤的邻居检索，使用 Associations 路由：
+
+```http
+GET /api/associations/{domain}/neighbors/{node}?hops=2&relation=part_of&direction=out
+```
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `node`（path） | — | 概念节点名（支持 `concept:xxx`、`note:xxx`、`resource:xxx` 前缀自动探测） |
+| `hops` | `1` | 1–5 |
+| `relation` | `""` | `RelationType` 枚举（非法 400） |
+| `direction` | `any` | `any` / `out` / `in` |
+
+## Agent 工具
+
+```python
+@tool
+async def kg_global_search(domain: str, query: str, top_k: int = 10) -> str:
+    """BM25 + 向量混合检索（含 1 跳邻居）。"""
+
+@tool
+async def kg_graph_neighbors(domain: str, node: str, hops: int = 1) -> str:
+    """N 跳 FalkorDB 邻居（图遍历）。"""
+
+@tool
+async def kg_search_nodes(domain: str, query: str, top_k: int = 10) -> str:
+    """轻量纯名称搜索（仅返回节点名 + summary）。"""
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Embedding 集成" icon="magnifying-glass" href="/integrations/embedding">
+    BM25 + 向量混合权重
+  </Card>
+  <Card title="Associations API" icon="share-nodes" href="/api-reference/associations">
+    关联图 CRUD + 带 relation 过滤的邻居
+  </Card>
+</CardGroup>

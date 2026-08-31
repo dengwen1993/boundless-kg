@@ -1,0 +1,135 @@
+---
+title: "Notes API"
+description: "笔记 CRUD + LLM 生成"
+---
+
+## 读取笔记
+
+```http
+GET /api/notes/{domain}?node=ColBERT
+```
+
+**响应（存在）**：
+
+```json
+{
+  "exists": true,
+  "node": "ColBERT",
+  "content": "# ColBERT\n\n...",
+  "frontmatter": {
+    "prompt_version": "v3",
+    "model": "deepseek-v4-pro",
+    "generated_at": "2026-08-28T12:34:56Z"
+  }
+}
+```
+
+**响应（不存在）**：
+
+```json
+{
+  "exists": false,
+  "needs_generation": true,
+  "node": "ColBERT"
+}
+```
+
+## 保存笔记（覆盖）
+
+```http
+PUT /api/notes/{domain}?node=ColBERT
+Content-Type: text/markdown
+
+# ColBERT
+
+> 后期交互（Late Interaction）的代表模型之一。
+
+## 一句话定义
+...
+```
+
+**响应 200**：
+
+```json
+{
+  "saved_at": "2026-08-28T12:34:56Z",
+  "char_count": 4521,
+  "word_count": 1234
+}
+```
+
+## LLM 生成笔记
+
+```http
+POST /api/notes/{domain}/generate?node=ColBERT
+```
+
+**行为**：
+- 使用 `KG_NOTE_LLM_PROVIDER`（默认回退到 `KG_GENERATION_LLM_PROVIDER` → `KG_LLM_PROVIDER`）
+- 自动收集上下文（节点 + 父节点 + 兄弟 + 关联资源）
+- 覆盖已有笔记（除非 `?dry_run=true`）
+
+**响应**：
+
+```json
+{
+  "node": "ColBERT",
+  "content": "# ColBERT\n\n...",
+  "prompt_version": "v3",
+  "model": "deepseek-v4-pro",
+  "duration_ms": 4321
+}
+```
+
+## 列出有笔记的节点
+
+```http
+GET /api/notes/{domain}
+```
+
+**响应**：
+
+```json
+[
+  {"node": "ColBERT", "char_count": 4521, "updated_at": "..."},
+  {"node": "BM25", "char_count": 3210, "updated_at": "..."}
+]
+```
+
+## 子节点笔记索引
+
+```http
+GET /api/notes-index/{domain}?node=后期交互
+```
+
+**响应**：
+
+```json
+[
+  {"name": "ColBERT", "summary": "...", "has_note": true, "char_count": 4521},
+  {"name": "BM25", "summary": "...", "has_note": true, "char_count": 3210},
+  {"name": "SPLADE", "summary": "...", "has_note": false}
+]
+```
+
+**用途**：前端左侧树快速展示（不需要加载完整笔记正文）。
+
+## 错误码
+
+| HTTP | 含义 |
+| --- | --- |
+| 400 | 节点名非法（含特殊字符） |
+| 404 | 节点不存在 |
+| 502 | LLM 调用失败 |
+| 504 | LLM 调用超时（`KG_LLM_TIMEOUT_SEC`） |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Resources API" icon="paperclip" href="/api-reference/resources">
+    Web / 文件资源
+  </Card>
+  <Card title="笔记生成指南" icon="book" href="/guides/notes">
+    实现细节
+  </Card>
+</CardGroup>

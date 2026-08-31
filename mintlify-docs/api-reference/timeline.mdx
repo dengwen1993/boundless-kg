@@ -1,0 +1,92 @@
+---
+title: "Timeline API"
+description: "JSONL-backed 活动时间线"
+---
+
+## 查询时间线
+
+```http
+GET /api/timeline/{domain}?date=2026-08-28&node=ColBERT&type=NODE_CREATED&limit=50
+```
+
+**查询参数**：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `date` | `YYYY-MM-DD` | 过滤日期（不传则全部） |
+| `node` | string | 过滤节点 |
+| `type` | string | 过滤事件类型（支持前缀匹配） |
+| `actor` | `user` / `agent` / `system` / `cli` | 过滤触发者 |
+| `limit` | int | 默认 100，上限 1000 |
+| `offset` | int | 分页偏移 |
+
+**响应**：
+
+```json
+{
+  "items": [
+    {
+      "timestamp": "2026-08-28T12:34:56Z",
+      "domain": "rag_检索增强生成",
+      "node": "ColBERT",
+      "event_type": "NODE_UPDATED",
+      "actor": "agent",
+      "payload": {
+        "old_summary": "...",
+        "new_summary": "..."
+      },
+      "trace_id": "..."
+    }
+  ],
+  "total": 234,
+  "limit": 50,
+  "offset": 0,
+  "has_more": true
+}
+```
+
+## 事件类型
+
+详见 [事件总线 → 事件类型目录](/concepts/event-bus#事件类型目录)。
+
+常用：
+
+| 类型 | 触发 |
+| --- | --- |
+| `NODE_CREATED` / `NODE_UPDATED` / `NODE_DELETED` / `NODE_RENAMED` | `GraphService` |
+| `NOTE_GENERATED` / `NOTE_SAVED` | `NoteService` |
+| `RESOURCE_ADDED` / `RESOURCE_REMOVED` | `ResourceService` |
+| `PLAN_ADDED` / `PLAN_UPDATED` / `PLAN_ACTION_UPDATED` | `PlanService` |
+| `ASSOCIATION_EXTRACTED` / `ASSOCIATION_SYNCED` | `AssociationService` |
+| `PIPELINE_*` | `GenerationPipeline` |
+
+## 排序
+
+默认**时间倒序**（最新在前）。
+
+## 数据源
+
+JSONL 文件，per-domain per-day：
+
+```text
+workspace/.agent_memory/activity/
+├── rag_检索增强生成/
+│   ├── 2026-08-28.jsonl
+│   ├── 2026-08-27.jsonl
+│   └── ...
+└── _global/
+    └── 2026-08-28.jsonl
+```
+
+每行一个 JSON 对象。可用 `tail -f` 或 `jq` 直接查询。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="事件总线概念" icon="timeline" href="/concepts/event-bus">
+    ActivityBus / JSONL 内部机制
+  </Card>
+  <Card title="Memory API" icon="brain" href="/api-reference/memory">
+    Agent 会话记忆
+  </Card>
+</CardGroup>

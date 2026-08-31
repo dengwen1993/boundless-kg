@@ -1,0 +1,219 @@
+---
+title: "添加新 Skill"
+description: "在 src/skills/ 加一个 CLI 工具 + 接入 SkillsMiddleware"
+---
+
+## Skill 是什么
+
+Skill 是**作为子进程调用的 CLI 工具**。Agent 通过 `kg_run_skill` 触发。
+
+```text
+src/skills/&lt;skill_name&gt;/
+├── SKILL.md          # 给 Agent 看的描述（行为规范）
+└── scripts/
+    ├── main.py       # CLI 入口
+    └── ...           # 其他辅助脚本
+```
+
+## 步骤 1：创建目录
+
+```bash
+mkdir -p src/skills/my-new-skill/scripts
+```
+
+## 步骤 2：SKILL.md
+
+`src/skills/my-new-skill/SKILL.md`：
+
+```markdown
+# My New Skill
+
+## 一句话描述
+生成某个领域的技术雷达图（SVG）。
+
+## 适用场景
+用户要求"画一下 RAG 领域的技术成熟度雷达图"。
+
+## Action 列表
+
+### generate_radar
+- 参数：`{domain, dimensions[]}`
+- 输出：SVG 文件路径
+- 示例：`kg_run_skill(skill="my-new-skill", action="generate_radar", params={"domain": "rag"})`
+
+## 注意事项
+- 输出文件存到 `workspace/_skills_output/my-new-skill/&lt;timestamp&gt;.svg`
+- LLM 拿到的是路径，前端通过 `/api/skills/output/&lt;path&gt;` 读取
+```
+
+## 步骤 3：CLI 入口
+
+`src/skills/my-new-skill/scripts/main.py`：
+
+```python
+#!/usr/bin/env python3
+"""my-new-skill CLI."""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+
+async def generate_radar(domain: str, dimensions: list[str], output: Path) -> str:
+    # 实现逻辑
+    svg = f'&lt;svg&gt;&lt;text&gt;{domain} radar&lt;/text&gt;&lt;/svg&gt;'
+    output.write_text(svg, encoding="utf-8")
+    return str(output)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="my-new-skill")
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    p_radar = sub.add_parser("generate_radar")
+    p_radar.add_argument("--domain", required=True)
+    p_radar.add_argument("--dimensions", nargs="+", required=True)
+    p_radar.add_argument("--output", required=True, type=Path)
+
+    args = parser.parse_args()
+
+    if args.action == "generate_radar":
+        out = asyncio.run(generate_radar(args.domain, args.dimensions, args.output))
+        # 输出 JSON 让 Python 端解析
+        json.dump({"output": out, "status": "ok"}, sys.stdout)
+    else:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## 步骤 4：注册到 SkillsMiddleware
+
+`src/agent/skills_setup.py` 加：
+
+```python
+SKILLS_REGISTRY = {
+    "minimax-pdf": {
+        "path": "minimax-pdf/scripts/main.py",
+        "actions": ["cover", "render_body", "merge"],
+        "timeout_sec": 600,
+    },
+    "pptx-generator": {...},
+    "minimax-docx": {...},
+    "knowledge-digest": {...},
+    "my-new-skill": {                                      # 新增
+        "path": "my-new-skill/scripts/main.py",            # 新增
+        "actions": ["generate_radar"],                      # 新增
+        "timeout_sec": 60,                                  # 新增
+    },
+}
+```
+
+## 步骤 5：配置（可选）
+
+```python src/config/settings.py
+class Settings(BaseSettings):
+    # ... 原有 ...
+    skill_my_new_skill_enabled: bool = Field(default=True, alias="KG_SKILL_RADAR_ENABLED")
+    skill_my_new_skill_path: str = Field(default="", alias="KG_SKILL_RADAR_PATH")
+```
+
+```bash .env
+KG_SKILL_RADAR_ENABLED=true
+KG_SKILL_RADAR_PATH=                          # 空 = &lt;repo&gt;/src/skills/my-new-skill
+```
+
+## 步骤 6：测试
+
+`tests/unit/test_my_new_skill.py`：
+
+```python
+import pytest
+from src.application.skill_runner import SkillRunner
+
+
+@pytest.fixture
+def skill_runner():
+    return SkillRunner()
+
+
+async def test_generate_radar_creates_svg(skill_runner, tmp_path):
+    output = tmp_path / "radar.svg"
+
+    result = await skill_runner.run(
+        skill="my-new-skill",
+        action="generate_radar",
+        params={"domain": "rag", "dimensions": ["maturity", "adoption"], "output": str(output)},
+    )
+
+    assert output.exists()
+    assert "&lt;svg&gt;" in output.read_text()
+    assert result["status"] == "ok"
+```
+
+## 步骤 7：更新文档
+
+- `SKILL.md`（给 Agent 看）
+- `docs/`（如果用户需要查）
+- 本页的"外部 Skills"页面（手动维护）
+
+## Skill 设计建议
+
+| 维度 | 建议 |
+| --- | --- |
+| **幂等** | 同输入同输出（除非显式带 timestamp） |
+| **超时** | 设合理超时（默认 600s 偏长） |
+| **错误** | 退出码 + stderr 都要清晰 |
+| **输出** | 写文件，路径返回给调用方；不在 stdout 打大段内容 |
+| **依赖** | 自包含（用 venv 隔离），别假设系统装了 Chromium / pandoc |
+
+## 子进程调用实现（参考）
+
+`src/application/skill_runner.py::run()`：
+
+```python
+async def run(self, skill: str, action: str, params: dict) -> dict:
+    registry_entry = SKILLS_REGISTRY[skill]
+    skill_path = get_skills_dir() / skill
+    script = skill_path / registry_entry["path"]
+
+    # 把 params 展平成 --key value 命令行参数
+    cmd = [sys.executable, str(script), action]
+    for k, v in flatten(params).items():
+        cmd.extend([f"--{k.replace('_', '-')}", str(v)])
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=registry_entry["timeout_sec"],
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise SkillTimeout(skill, action)
+
+    if proc.returncode != 0:
+        raise SkillFailed(skill, action, stderr.decode())
+
+    return json.loads(stdout)
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="外部 Skills 集成" icon="puzzle-piece" href="/integrations/skills">
+    现存 Skills 列表
+  </Card>
+  <Card title="添加新工具" icon="plus" href="/development/add-tool">
+    @tool 装饰的工具
+  </Card>
+</CardGroup>

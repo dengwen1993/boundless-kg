@@ -1,0 +1,166 @@
+---
+title: "并发与限流"
+description: "PendingNodesBuffer / 搜索并发 / 异步锁 / ActivityBus 订阅者隔离"
+---
+
+## 三个并发边界
+
+BoundlessKG 有三种并发需要管：
+
+1. **图谱写并发**：多请求同时改 `knowledge_graph.json` 会破坏一致性
+2. **LLM 调用并发**：5 阶段流水线跑 8 个子树扩展，全并发会打爆 LLM 配额
+3. **事件订阅者并发**：单个订阅者阻塞不能影响其他订阅者
+
+## 1. 图谱写并发（异步锁）
+
+`src/infrastructure/lock.py`：
+
+```python
+class AsyncGraphLock:
+    """per-event-loop 单例，保护所有图谱写操作。"""
+
+    _instances: dict[int, asyncio.Lock] = {}
+
+    @classmethod
+    def get(cls) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if id(loop) not in cls._instances:
+            cls._instances[id(loop)] = asyncio.Lock()
+        return cls._instances[id(loop)]
+```
+
+**为什么 per-event-loop？** asyncio.Lock 不能跨 loop 复用。`@lru_cache` 会把锁绑到首次创建时的 loop，uvicorn 重启或测试间切换 loop 会失败。
+
+**用法**：所有 Repository 写操作必须 `async with graph_lock():` 包住：
+
+```python
+class GraphRepository:
+    async def save(self, graph: Graph) -> None:
+        async with graph_lock():
+            await self._atomic_write_json("knowledge_graph.json", graph.model_dump())
+```
+
+## 2. LLM 调用并发
+
+### 搜索并发
+
+`KG_SEARCH_MAX_CONCURRENCY`（默认 5）+ `KG_SEARCH_RATE_LIMIT_MS`（默认 300）：
+
+```python
+class RateLimitedSearchClient:
+    def __init__(self):
+        self._semaphore = asyncio.Semaphore(settings.max_concurrency)
+        self._last_call = 0
+
+    async def search(self, query: str) -> list[SearchHit]:
+        async with self._semaphore:
+            # 速率限制
+            now = time.monotonic()
+            wait = settings.rate_limit_ms / 1000 - (now - self._last_call)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_call = time.monotonic()
+            return await self._inner.search(query)
+```
+
+### 5 阶段流水线并发
+
+`src/application/generation_pipeline.py` 用 `asyncio.gather` 并行子树扩展，但有上限：
+
+```python
+semaphore = asyncio.Semaphore(KG_SEARCH_MAX_CONCURRENCY)
+
+async def expand_one_subtree(group):
+    async with semaphore:
+        return await llm.chat_structured(...)
+
+subtrees = await asyncio.gather(*[
+    expand_one_subtree(g) for g in groups
+])
+```
+
+### PendingNodesBuffer
+
+`src/application/pending_nodes_buffer.py` —— LLM 关联抽取的防抖缓冲：
+
+```python
+class PendingNodesBuffer:
+    """节点事件累积到阈值（≥10 节点 或 ≥5 min）才触发一次 LLM 抽取。"""
+
+    async def add(self, domain: str, node: str):
+        self._buffer[(domain, node)] = time.time()
+        if len(self._buffer) >= 10 or self._oldest_age() >= 300:
+            await self._flush()
+
+    async def _flush(self):
+        snapshot = list(self._buffer.keys())
+        self._buffer.clear()
+        # 一次 LLM 调用处理所有待抽取节点
+        associations = await llm.extract_associations(snapshot)
+        await self.assoc_service.apply(associations)
+```
+
+**好处**：高频小变更（如编辑笔记）不会触发 N 次 LLM 调用，攒够一波只跑一次。
+
+## 3. 事件订阅者并发
+
+`src/observability/activity_bus.py`：
+
+```python
+async def emit(self, event: ActivityEvent) -> None:
+    # 1) 同步写 JSONL（不能丢）
+    await self._log.write(event)
+    # 2) 异步通知订阅者（异常隔离）
+    for subscriber in self._subscribers:
+        asyncio.create_task(self._safe_invoke(subscriber, event))
+
+async def _safe_invoke(self, fn, event):
+    try:
+        await fn(event)
+    except Exception:
+        log.exception("subscriber failed", event_type=event.event_type)
+```
+
+**三个不变量**：
+1. **JSONL 先于订阅者**：日志不能丢
+2. **订阅者异步**：不阻塞业务路径
+3. **异常隔离**：单个订阅者崩了不影响其他订阅者
+
+## 4. Agent 递归上限
+
+`KG_AGENT_RECURSION_LIMIT`（默认 250）—— 工具调用链深度：
+
+```python
+agent = create_deep_agent(
+    tools=ALL_TOOLS,
+    model=get_llm(),
+    recursion_limit=settings.agent.recursion_limit,
+)
+```
+
+**为什么需要？** Agent 可能进入循环（tool A → tool B → tool A）。超过 250 强制中断，防止 OOM。
+
+## 5. SSE 流式并发
+
+`POST /api/agent/invoke` 是单请求单流模式。多个并发对话 = 多个独立 SSE 连接，**互相不干扰**。会话状态存在 `conversations/&lt;session_id&gt;.jsonl`，按 `session_id` 隔离。
+
+## 调优清单
+
+| 症状 | 调优 |
+| --- | --- |
+| LLM 429 限流 | 调小 `KG_SEARCH_MAX_CONCURRENCY=3` 或调大 `KG_SEARCH_RATE_LIMIT_MS=1000` |
+| 5 阶段流水线慢 | 调大并发到 10（如果 LLM 配额够） |
+| PendingNodesBuffer 触发太频繁 | 调高阈值（修改 `pending_nodes_buffer.py`） |
+| Agent 提前中断 | 调大 `KG_AGENT_RECURSION_LIMIT=500` |
+| 事件订阅者积压 | 检查订阅者是否同步阻塞（应改成 `asyncio.create_task`） |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="事件总线" icon="timeline" href="/concepts/event-bus">
+    订阅者怎么注册、怎么被隔离
+  </Card>
+  <Card title="监控与日志" icon="chart-line" href="/deployment/monitoring">
+    并发问题怎么观测
+  </Card>
+</CardGroup>

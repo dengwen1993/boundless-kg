@@ -1,0 +1,249 @@
+---
+title: "测试"
+description: "~600 unit + ~70 integration，conftest 夹具，pytest 配置"
+---
+
+## 运行
+
+```bash
+pytest -q                     # 全部
+pytest tests/unit -q          # 仅单元（~50 个文件）
+pytest tests/integration -q   # 集成（~3 个文件，需要 FalkorDB）
+pytest -k "graph" -q          # 按关键字
+pytest --co                   # 列出全部测试，不执行
+```
+
+## 结构
+
+```text
+tests/
+├── conftest.py               # 根夹具（所有测试可见）
+├── integration/
+│   ├── conftest.py           # 集成夹具
+│   ├── test_api.py
+│   ├── test_associations_api.py
+│   └── test_falkordb_embedding_e2e.py
+└── unit/                     # ~50 个文件
+    ├── test_domain_*.py
+    ├── test_application.py
+    ├── test_infrastructure_*.py
+    ├── test_observability.py
+    └── ...
+```
+
+## 全局夹具（`tests/conftest.py`）
+
+```python
+@pytest.fixture
+def tmp_kb_root(tmp_path):
+    """临时知识库根。每次测试一个干净的目录。"""
+    kb = tmp_path / "knowledge_bases"
+    kb.mkdir()
+    return kb
+
+@pytest.fixture
+def tmp_workspace_dir(tmp_path):
+    """临时工作区。"""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    return ws
+
+@pytest.fixture(autouse=True)
+def _reset_graph_lock():
+    """每个测试前清空 async lock 缓存，避免跨 loop 绑定。"""
+    from src.infrastructure.lock import AsyncGraphLock
+    AsyncGraphLock._instances.clear()
+    yield
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    """清空 KG_* 环境变量。"""
+    for k in list(os.environ):
+        if k.startswith("KG_") or k.startswith("ANTHROPIC_") or k.startswith("DEEPSEEK_"):
+            monkeypatch.delenv(k, raising=False)
+```
+
+## 集成测试（`tests/integration/conftest.py`）
+
+集成测试需要 FalkorDB：
+
+```python
+@pytest.fixture(scope="session")
+def falkordb_url():
+    return os.getenv("FALKORDB_TEST_URL", "redis://localhost:6379")
+
+@pytest.fixture
+def falkordb_client(falkordb_url):
+    """FalkorDB 测试客户端。用前清库，用后清库。"""
+    client = FalkorDB.from_url(falkordb_url)
+    client.flushdb()
+    yield client
+    client.flushdb()
+```
+
+**前置条件**：
+
+```bash
+docker run -d --name falkordb-test -p 6379:6379 falkordb/falkordb:latest
+pytest tests/integration -q
+```
+
+## 写测试的约定
+
+### 命名
+
+```text
+test_&lt;unit_under_test&gt;.py     # 文件名
+test_&lt;behavior&gt;               # 测试函数名
+```
+
+### AAA 模式
+
+```python
+async def test_add_node_creates_node_in_graph():
+    # Arrange
+    repo = GraphRepository(tmp_kb_root)
+    service = GraphService(repo=repo)
+
+    # Act
+    node = await service.add_node(domain="rag", name="ColBERT", parent="后期交互")
+
+    # Assert
+    assert node.name == "ColBERT"
+    assert node.tier == "L2"
+    saved = await repo.read("rag")
+    assert "ColBERT" in saved.nodes
+```
+
+### Mock 外部依赖
+
+```python
+async def test_note_generator_uses_llm(monkeypatch):
+    # Arrange
+    called_with = []
+    async def mock_chat(messages, **kwargs):
+        called_with.append(messages)
+        return "# Generated Note\n\nContent"
+
+    monkeypatch.setattr(
+        "src.infrastructure.llm.openai_compat.OpenAICompatClient.chat",
+        mock_chat,
+    )
+
+    # Act
+    note = await NoteGenerator(llm=get_llm()).generate(context)
+
+    # Assert
+    assert "Generated Note" in note.content
+    assert called_with  # 确认调用过
+```
+
+### 不要 mock 文件系统
+
+文件系统是真——用 `tmp_kb_root` 临时目录。这是 BoundlessKG 测试速度的关键（虽然有些慢）。
+
+**例外**：测试 atomic write 时可能 mock `os.replace`；其余不要。
+
+### 事件断言
+
+```python
+async def test_add_node_emits_event(tmp_kb_root):
+    bus = ActivityBus()
+
+    captured = []
+
+    async def handler(event):
+        captured.append(event)
+
+    await bus.subscribe(handler)
+
+    service = GraphService(repo=GraphRepository(tmp_kb_root))
+    await service.add_node(domain="rag", name="ColBERT", parent="后期交互")
+
+    # 等异步订阅者执行
+    await asyncio.sleep(0.1)
+
+    assert len(captured) == 1
+    assert captured[0].domain == "rag"
+    assert captured[0].node == "ColBERT"
+```
+
+## 覆盖范围
+
+| 层 | 覆盖目标 |
+| --- | --- |
+| domain | 算法、校验、模型转换 |
+| application | 业务流程编排、状态机 |
+| infrastructure | Repository 原子写、LLM 客户端重试、搜索自适应 |
+| api | 路由 schema、HTTP code、中间件 |
+| agent | 工具契约、middleware、SSE 帧格式 |
+| observability | ActivityBus 异常隔离、JSONL 写入 |
+
+## 守护性测试
+
+| 测试 | 守护 |
+| --- | --- |
+| `test_tool_count_consistency.py` | 工具数 = 53 |
+| `test_path_normalize_middleware.py` | 路径处理不漏 |
+| `test_write_claim_middleware.py` | 写声明拦截 |
+| `test_domain_*.py` | domain 层零 IO |
+
+## 调试技巧
+
+```bash
+# 某个测试失败
+pytest tests/unit/test_application.py::test_add_node -xvs
+
+# 只跑某个 marker（如果有）
+pytest -m "slow"
+
+# 并发跑
+pytest -n 4
+
+# 覆盖率
+pytest --cov=src --cov-report=html
+open htmlcov/index.html
+```
+
+## CI 集成建议
+
+```yaml .github/workflows/test.yml
+name: tests
+on: [push, pull_request]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[dev,deepagents]"
+      - run: pytest tests/unit -q
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[dev,deepagents]"
+      - run: pytest tests/integration -q
+        env:
+          KG_FALKORDB_HOST: localhost
+          KG_FALKORDB_PORT: 6379
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="添加新工具" icon="plus" href="/development/add-tool">
+    给 Agent 加能力
+  </Card>
+  <Card title="设计原则" icon="compass" href="/development/principles">
+    测试守护的设计原则
+  </Card>
+</CardGroup>

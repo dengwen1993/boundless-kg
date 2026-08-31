@@ -1,0 +1,23 @@
+node_modules/
+frontend-vue/node_modules/
+*.pyc
+example/
+# Workspace tree — everything the agent writes at runtime.
+# Only the curated memory files (AGENTS.md / bugs.md / …) stay tracked,
+# and even those live one level above in workspace/* (without the dot).
+workspace/knowledge_bases/
+workspace/.agent_memory/
+workspace/_pipeline/
+workspace/_staging/
+# Backwards-compat: the pre-refactor locations are no longer written
+# to, but if they ever reappear (e.g. someone copying an old checkout),
+# we still want to ignore their contents.
+knowledge_bases/
+.agent_memory/
+frontend-vue/dist/
+logs/
+.idea/
+src/skills/minimax-docx/scripts/dotnet/
+tmp/
+.venv/
+.claude/

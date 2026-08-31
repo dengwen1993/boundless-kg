@@ -1,0 +1,187 @@
+---
+title: "Associations API"
+description: "关联图 CRUD + 同步"
+---
+
+## 列出关联图（总体）
+
+```http
+GET /api/associations/{domain}
+```
+
+**响应**：
+
+```json
+{
+  "domain": "rag_检索增强生成",
+  "metadata": {
+    "concept_count": 23,
+    "resource_count": 18,
+    "edge_count": 67,
+    "last_extracted_at": "2026-08-28T12:34:56Z",
+    "source": "falkordb"
+  },
+  "concepts": [...],
+  "resources": [...],
+  "associations": [...]
+}
+```
+
+## 只列概念
+
+```http
+GET /api/associations/{domain}/concepts
+```
+
+## 只列资源
+
+```http
+GET /api/associations/{domain}/resources
+```
+
+## 只列边
+
+```http
+GET /api/associations/{domain}/edges?relation=PART_OF
+```
+
+## 邻居查询（图遍历）
+
+```http
+GET /api/associations/{domain}/neighbors?node=ColBERT&depth=2
+```
+
+**响应**：
+
+```json
+{
+  "root": "ColBERT",
+  "depth": 2,
+  "nodes": [...],
+  "edges": [
+    {"source": "ColBERT", "target": "后期交互", "relation": "PART_OF", "depth": 1},
+    {"source": "后期交互", "target": "检索增强", "relation": "PART_OF", "depth": 2}
+  ]
+}
+```
+
+**实现**：FalkorDB 图遍历；不可达时降级到 `associations.json` 的 BFS。
+
+## 统计
+
+```http
+GET /api/associations/{domain}/statistics
+```
+
+**响应**：
+
+```json
+{
+  "concept_count": 23,
+  "resource_count": 18,
+  "edge_count": 67,
+  "by_relation": {
+    "PART_OF": 24,
+    "PREREQUISITE_OF": 12,
+    "SIMILAR_TO": 15,
+    "CONTRASTS_WITH": 8,
+    "EXAMPLE_OF": 4,
+    "REFERENCES": 4
+  },
+  "by_source": {
+    "llm": 56,
+    "manual": 8,
+    "inferred": 3
+  },
+  "source": "falkordb"  // or "json"
+}
+```
+
+## 全量同步
+
+```http
+POST /api/associations/{domain}/sync
+```
+
+**行为**：扫描 `knowledge_bases/&lt;domain&gt;/` 下所有 knowledge_graph.json + notes + resources，抽取关联 → 写 FalkorDB + `associations.json`。
+
+**响应**：
+
+```json
+{
+  "extracted": 67,
+  "duration_ms": 12345
+}
+```
+
+## 单节点同步
+
+```http
+POST /api/associations/{domain}/sync-node?node=ColBERT
+```
+
+## 强制 flush buffer
+
+```http
+POST /api/associations/{domain}/flush-llm
+```
+
+**用途**：绕过 `PendingNodesBuffer` 防抖阈值，立即触发 LLM 抽取。
+
+## 立即抽取（增量）
+
+```http
+POST /api/associations/{domain}/extract-now
+```
+
+**行为**：扫描 `PendingNodesBuffer` → 立即 LLM 抽取（不阻塞等待阈值）。
+
+## 手动添加
+
+```http
+POST /api/associations/{domain}/manual
+Content-Type: application/json
+
+{
+  "source_id": "ColBERT",
+  "source_type": "concept",
+  "target_id": "https://arxiv.org/...",
+  "target_type": "resource",
+  "relation": "REFERENCES",
+  "intensity": {"strength": 0.9, "confidence": 1.0, "source": "manual"}
+}
+```
+
+## 手动删除
+
+```http
+DELETE /api/associations/{domain}/manual?source_id=X&target_id=Y&relation=Z
+```
+
+## 删除整个关联图
+
+```http
+DELETE /api/associations/{domain}
+```
+
+⚠️ **不可恢复**。
+
+## 删除单个概念
+
+```http
+DELETE /api/associations/{domain}/concept?concept=X
+```
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="关联图数据模型" icon="share-nodes" href="/concepts/association-model">
+    RelationType / EdgeIntensity
+  </Card>
+  <Card title="FalkorDB 集成" icon="database" href="/integrations/falkordb">
+    图存储 + 降级
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api-reference/search">
+    跨图谱检索
+  </Card>
+</CardGroup>

@@ -1,0 +1,171 @@
+---
+title: "Resources API"
+description: "Web 资源 / 上传文件 / 学习资料"
+---
+
+## 列出资源
+
+```http
+GET /api/resources/{domain}?node=ColBERT
+```
+
+**响应**：
+
+```json
+{
+  "web": [
+    {
+      "url": "https://arxiv.org/abs/2004.12832",
+      "title": "ColBERT: Efficient and Effective Passage Search...",
+      "description": "...",
+      "source": "manual",
+      "tags": ["paper"],
+      "added_at": "2026-08-28T12:34:56Z",
+      "added_by": "user"
+    }
+  ],
+  "uploads": [
+    {
+      "filename": "colbert.pdf",
+      "size": 1234567,
+      "mime": "application/pdf",
+      "uploaded_at": "2026-08-28T12:34:56Z"
+    }
+  ]
+}
+```
+
+## 添加 Web 资源
+
+```http
+POST /api/resources/{domain}/web
+Content-Type: application/json
+
+{
+  "node": "ColBERT",
+  "url": "https://arxiv.org/abs/2004.12832",
+  "title": "ColBERT: Efficient...",
+  "description": "后期交互的代表论文",
+  "source": "manual",
+  "tags": ["paper"]
+}
+```
+
+**响应 201**：
+
+```json
+{...完整资源对象...}
+```
+
+## 删除 Web 资源
+
+```http
+DELETE /api/resources/{domain}/web?node=ColBERT&url=https://...
+```
+
+## 更新 Web 资源
+
+```http
+PUT /api/resources/{domain}/web?node=ColBERT&original_url=https://old-url
+Content-Type: application/json
+
+{
+  "url": "https://new-url",
+  "title": "...",
+  "tags": ["paper"]
+}
+```
+
+**用途**：替换 URL 但保留原 URL 的引用计数。
+
+## 上传文件
+
+```http
+POST /api/resources/{domain}/upload
+Content-Type: multipart/form-data
+
+file=@/path/to/colbert.pdf
+node=ColBERT
+```
+
+**响应 201**：
+
+```json
+{
+  "filename": "colbert.pdf",
+  "size": 1234567,
+  "mime": "application/pdf",
+  "uploaded_at": "2026-08-28T12:34:56Z",
+  "url": "/api/resources/rag_检索增强生成/download/colbert.pdf?node=ColBERT"
+}
+```
+
+## 删除上传文件
+
+```http
+DELETE /api/resources/{domain}/upload/{filename}?node=ColBERT
+```
+
+## 更新上传文件
+
+```http
+PUT /api/resources/{domain}/upload/{filename}?node=ColBERT
+Content-Type: multipart/form-data
+
+file=@/path/to/colbert-v2.pdf
+```
+
+**行为**：原子替换（先备份，再覆盖）。
+
+## 下载 / 预览文件
+
+```http
+GET /api/resources/{domain}/download/{filename}?node=ColBERT
+```
+
+返回文件流（带 `Content-Disposition`）。前端可内嵌或下载。
+
+## 学习资料列表
+
+```http
+GET /api/resources/{domain}/study-materials?path=数据集
+```
+
+**响应**：
+
+```json
+{
+  "path": "数据集",
+  "items": [
+    {"name": "mmarco.csv", "size": 12345678, "modified_at": "..."}
+  ]
+}
+```
+
+## 学习资料下载
+
+```http
+GET /api/resources/{domain}/study-materials/{filename:path}
+```
+
+**响应**：文件流。
+
+## 错误码
+
+| HTTP | 含义 |
+| --- | --- |
+| 400 | 文件名非法 / 上传大小超限 |
+| 404 | 节点 / 文件不存在 |
+| 413 | 文件过大 |
+| 415 | 不支持的 MIME |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="临时文件上传" icon="upload" href="/api-reference/uploads">
+    暂存区 + 自动归类
+  </Card>
+  <Card title="Plans API" icon="list-check" href="/api-reference/plans">
+    学习计划
+  </Card>
+</CardGroup>

@@ -1,0 +1,139 @@
+---
+title: "Memory API"
+description: "Agent 会话记忆查询、检索、召回"
+---
+
+## 列出会话
+
+```http
+GET /api/memory/sessions?days=7&limit=50&offset=0
+```
+
+**响应**：
+
+```json
+{
+  "items": [
+    {
+      "session_id": "user-123-session-abc",
+      "started_at": "2026-08-28T12:34:56Z",
+      "last_active_at": "2026-08-28T13:45:00Z",
+      "message_count": 23,
+      "domains": ["rag_检索增强生成"],
+      "tool_calls": 12,
+      "title": "帮我在 ColBERT 下面加一个子节点"
+    }
+  ],
+  "total": 156,
+  "limit": 50,
+  "offset": 0,
+  "has_more": true
+}
+```
+
+## 全文检索
+
+```http
+GET /api/memory/search?q=ColBERT&days=30&limit=20
+```
+
+**响应**：
+
+```json
+{
+  "query": "ColBERT",
+  "hits": [
+    {
+      "session_id": "user-123-session-abc",
+      "message_id": "msg-42",
+      "role": "user|assistant|tool",
+      "content": "...",
+      "score": 0.92,
+      "timestamp": "2026-08-28T12:34:56Z",
+      "context_before": "...",
+      "context_after": "..."
+    }
+  ]
+}
+```
+
+**实现**：先 BM25 粗排，再 LLM rerank（可选，`KG_AGENT_MEMORY_RERANK_ENABLED`）。
+
+## 最近消息召回
+
+```http
+GET /api/memory/recall?lines=100
+```
+
+**响应**：
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "...",
+      "timestamp": "..."
+    },
+    {
+      "role": "assistant",
+      "content": "...",
+      "timestamp": "...",
+      "tool_calls": [...]
+    }
+  ]
+}
+```
+
+**用途**：Agent 在新会话开始时快速加载上下文（不读全部历史）。
+
+## 单会话详情
+
+```http
+GET /api/memory/session/{session_id}
+```
+
+**响应**：
+
+```json
+{
+  "session_id": "user-123-session-abc",
+  "started_at": "...",
+  "ended_at": "...",
+  "messages": [
+    {
+      "ts": "2026-08-28T12:34:56Z",
+      "role": "user",
+      "content": "...",
+      "trace_id": "..."
+    },
+    {
+      "ts": "2026-08-28T12:35:00Z",
+      "role": "assistant",
+      "content": "...",
+      "tool_calls": [
+        {"tool": "kg_add_node", "args": {...}, "result": "ok"}
+      ]
+    }
+  ]
+}
+```
+
+## 数据存储
+
+```text
+workspace/.agent_memory/conversations/&lt;session_id&gt;.jsonl
+```
+
+每行一条消息，永久保留。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Agent SSE API" icon="stream" href="/api-reference/agent">
+    流式对话接口
+  </Card>
+  <Card title="Timeline API" icon="timeline" href="/api-reference/timeline">
+    业务活动时间线
+  </Card>
+</CardGroup>

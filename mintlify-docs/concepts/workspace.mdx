@@ -1,0 +1,115 @@
+---
+title: "数据落盘契约"
+description: "workspace/ 目录树、每个子目录的职责、gitignore 边界"
+---
+
+## 目录树总览
+
+```text
+workspace/                                       ← KG_WORKSPACE_DIR
+├── AGENTS.md                                    ← 持久记忆（版本控制）
+├── bugs.md / lessons.md / …                     ← 策展笔记（版本控制）
+│
+├── .agent_memory/                               ← Agent 运行时（gitignored）
+│   ├── conversations/                           ←   永久会话日志
+│   ├── tmp/                                     ←   临时文件（7 天过期）
+│   ├── cards/                                   ←   提示词卡片覆盖（可选）
+│   ├── skills/                                  ←   Skill 覆盖（可选）
+│   └── search_preference.json                   ←   搜索自适应历史
+│
+├── _pipeline/                                   ← 流水线状态（gitignored）
+│   └── &lt;task_id&gt;/state.json
+│
+├── _staging/                                    ← 文件上传暂存（gitignored）
+│   └── &lt;uuid&gt;__&lt;filename&gt;
+│
+└── knowledge_bases/                             ← KG_KB_ROOT；领域数据（gitignored）
+    └── &lt;domain&gt;/
+        ├── knowledge_graph.json                           ← 权威：图谱
+        ├── associations.json                    ← 语义关联（FalkorDB 备份）
+        ├── notes/&lt;node&gt;.md                      ← 每节点笔记
+        ├── resources/&lt;node&gt;/
+        │   ├── web.json                         ← Web 资源列表
+        │   └── uploads/                         ← 上传文件原档
+        ├── plans/&lt;node&gt;/plans.json
+        └── dossiers/&lt;node&gt;.json
+```
+
+## 关键约束
+
+### 双源真相
+
+- `knowledge_bases/&lt;domain&gt;/knowledge_graph.json` —— **权威源**（人类可读、版本可控）
+- FalkorDB —— **检索加速层**（嵌入向量 + 关联图）
+
+**单向同步**：`GraphSyncOrchestrator` 监听 `knowledge_graph.json` 变更 → 写入 FalkorDB。**不会反向写回**，文件树的修改永远是真。
+
+### Git 边界
+
+| 子目录 | git 状态 | 原因 |
+| --- | --- | --- |
+| `AGENTS.md` / `bugs.md` | ✅ 受版本控制 | 策展记忆是人类知识资产 |
+| `.agent_memory/conversations/` | ❌ gitignored | 会话量大，含敏感上下文 |
+| `.agent_memory/tmp/` | ❌ gitignored | 7 天过期清理 |
+| `_pipeline/` | ❌ gitignored | 运行时状态 |
+| `_staging/` | ❌ gitignored | 上传中转 |
+| `knowledge_bases/` | ❌ gitignored | 大量 LLM 生成内容 |
+
+### tmp 自动清理
+
+```python observability/activity_log.py
+async def _cleanup_tmp_loop():
+    while True:
+        await asyncio.sleep(24 * 3600)
+        cutoff = time.time() - 7 * 24 * 3600
+        for f in tmp_dir.glob("*"):
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+```
+
+## 跨平台路径
+
+`KG_KB_ROOT` / `KG_WORKSPACE_DIR` 同时支持：
+
+| 写法 | 例子 | 解析 |
+| --- | --- | --- |
+| POSIX 绝对路径 | `/app/workspace` | 原样使用（Windows 下也保持） |
+| Windows 绝对路径 | `C:\workspace` | 原样使用 |
+| 相对路径 | `./workspace` | 解析为 `<CWD>/workspace` |
+
+由 `src/config/settings.py::_resolve_path_setting()` 实现。设计动机：容器内默认 `/app/workspace` 不能被 Windows 开发者本地的 `Path.is_absolute()` 误判。
+
+## 工作区 vs 知识库
+
+**为什么分开？** `workspace/` 是 Agent 的"scratch space"（运行时数据），`knowledge_bases/` 是"出版品"（人类整理后的领域知识）。两者关注点完全不同：
+
+- `workspace/` 可以随时删（不影响知识）
+- `knowledge_bases/` 是核心资产
+
+如果未来要做多租户 / 多项目，`workspace/` 内还可以继续划分子目录：
+
+```
+workspace/
+├── project_a/
+│   ├── .agent_memory/
+│   └── knowledge_bases/
+└── project_b/
+    ├── .agent_memory/
+    └── knowledge_bases/
+```
+
+通过设置 `KG_WORKSPACE_DIR=./workspace/project_a` 切换。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="路径配置详解" icon="folder-tree" href="/deployment/env-vars">
+    KG_KB_ROOT / KG_WORKSPACE_DIR / 跨平台
+  </Card>
+  <Card title="Docker 部署" icon="docker" href="/deployment/docker">
+    容器内默认 /app/workspace
+  </Card>
+  <Card title="生产部署建议" icon="server" href="/deployment/production">
+    多副本 / 反向代理 / 备份策略
+  </Card>
+</CardGroup>

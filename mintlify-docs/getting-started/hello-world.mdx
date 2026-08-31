@@ -1,0 +1,130 @@
+---
+title: "Hello World"
+description: "10 分钟生成你的第一个领域图谱"
+---
+
+## 目标
+
+在 10 分钟内，从零开始生成一个名为 **"RAG 检索增强生成"** 的领域图谱，并验证它确实能跑通完整流水线。
+
+## 前置条件
+
+- 已完成 [安装](/getting-started/installation) 与 [配置](/getting-started/configuration)
+- 后端服务已启动（见 [启动](/getting-started/launch)）
+
+## 步骤 1：CLI 生成
+
+```bash
+kg-engine generate "RAG 检索增强生成" --wait
+```
+
+`--wait` 会阻塞直到 5 阶段流水线全部完成。首次运行通常需要 1-3 分钟（取决于 LLM 速度）。
+
+> **关于领域 ID**：领域 ID 直接取自主题文本。因此 `kg-engine generate "RAG 检索增强生成"` 创建的领域 ID 就是 `RAG 检索增强生成`。想让 ID 更干净、URL 更友好，可以在主题中避免空格（例如 `RAG检索增强生成`）。
+
+### 你应该会看到类似输出
+
+```text
+[1/5] Intent:        '技术综述'  (confidence=0.92, 3-sample voting)
+[2/5] Hot Keywords:  ['retrieval', 'augmentation', 'embedding', ...] (24 unique)
+[3/5] Expansion:     8 subtrees built (avg 6 nodes/subtree)
+[4/5] Graph Synth:   47 nodes, 86 edges, quality=good (0.78)
+[5/5] Persist:       knowledge_bases/RAG 检索增强生成/knowledge_graph.json written
+
+✓ Done in 132s. Run 'kg-engine report "RAG 检索增强生成"' for full report.
+```
+
+## 步骤 2：查看报告
+
+```bash
+kg-engine report "RAG 检索增强生成"
+```
+
+会输出：
+- L0/L1/L2 层级节点列表
+- 6 维质量评分（连通性 / 平衡性 / 链接完整性 / 摘要覆盖 / 元数据完整 / 反向链接完整）
+- 待修复建议（如有）
+
+## 步骤 3：API 验证
+
+```bash
+# 列出所有领域（这里能看到真实的领域 ID）
+curl http://localhost:8888/api/domains
+
+# 获取装饰后的图谱（带层级 / tier；领域 ID 含空格时需 URL 编码 %20）
+curl "http://localhost:8888/api/graph/RAG%20检索增强生成"
+
+# 健康检查
+curl http://localhost:8888/api/health
+```
+
+## 步骤 4：前端浏览
+
+打开 &lt;http://localhost:5175&gt;，左侧选择 **graph** 视图，能看到：
+
+- 节点按层级排列
+- 鼠标悬停看 summary
+- 单击节点右侧出现笔记面板
+- 顶部搜索框支持全文 + 向量混合检索
+
+## 步骤 5：跟 Agent 对话
+
+在前端右侧聊天框：
+
+```text
+帮我给 RAG 这个领域补充一个子主题 "ColBERT 后期交互"
+```
+
+或者直接用 API：
+
+```bash
+curl -X POST http://localhost:8888/api/agent/invoke \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "帮我在 RAG 检索增强生成 下面加一个 ColBERT 子节点，并生成笔记"
+  }'
+```
+
+会收到 SSE 流式响应，Agent 内部会调用 `kg_add_node`、`kg_generate_note` 等工具。
+
+## 验证清单
+
+- [ ] `kg-engine generate` 完整跑通
+- [ ] `knowledge_bases/RAG 检索增强生成/` 目录出现，包含 `knowledge_graph.json` 和 `notes/` 子目录
+- [ ] `curl /api/health` 返回 `agent_build_status: ready`
+- [ ] 前端能看到生成的图谱
+- [ ] Agent 对话能正常调用工具
+
+## 故障排查
+
+<AccordionGroup>
+  <Accordion title="LLM 报 401 / 403" icon="key">
+    检查 `.env` 里的 API key 是否正确，`base_url` 是否带尾部斜杠或缺协议头。
+  </Accordion>
+  <Accordion title="生成停在第 3 阶段超过 10 分钟" icon="hourglass">
+    很可能是 LLM 超时。调大 `KG_LLM_TIMEOUT_SEC=600`；如果是 reasoning 模型，调小 `KG_LLM_REASONING_EFFORT=low`。
+  </Accordion>
+  <Accordion title="前端看不到刚生成的领域" icon="eye">
+    前端缓存了领域列表。刷新页面（F5），或 `curl /api/domains` 确认数据已落盘。
+  </Accordion>
+  <Accordion title="agent_build_status: building" icon="spinner">
+    首次启动需要预构建 deepagents，等 30 秒后重试。查看日志确认无循环依赖或 import error。
+  </Accordion>
+</AccordionGroup>
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="理解架构" icon="sitemap" href="/concepts/architecture">
+    三层架构 + Protocol 反转
+  </Card>
+  <Card title="5 阶段流水线拆解" icon="gears" href="/guides/generation-pipeline">
+    每阶段在做什么、产物是什么
+  </Card>
+  <Card title="LLM 提供方切换" icon="layer-group" href="/integrations/llm-providers">
+    三层 LLM 角色怎么独立配置
+  </Card>
+  <Card title="Cookbook: 学术综述" icon="graduation-cap" href="/cookbook/academic">
+    用真实场景练手
+  </Card>
+</CardGroup>

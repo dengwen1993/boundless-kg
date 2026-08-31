@@ -1,0 +1,96 @@
+---
+title: "Changelog"
+description: "版本变更记录"
+---
+
+## v1.0.0（当前） · 2026-08
+
+首个稳定版本。
+
+### 核心能力
+
+- **5 阶段生成流水线**：intent → hot-keywords → expansion → graph-synth → persist
+- **FalkorDB 集成**：图存储 + 嵌入向量 + BM25 混合检索 + 优雅降级
+- **53 个 LangChain Agent 工具**：覆盖图谱 / 笔记 / 资源 / 计划 / 时间线 / 卡片 / 关联 / 档案 / 上传
+- **deepagents 编排**：SSE 流式对话 + 5 个 middleware（卡片 / Skills / 沙箱 shell / 写声明 / dossier 反思）
+- **事件总线**：所有写操作自动留痕（JSONL）+ 异步订阅 + 异常隔离
+- **13 种文件预览**：PDF / DOCX / PPTX / XLSX / CSV / MD / Mermaid / HTML / 图片 / 音频 / 视频 / Text / 其他
+
+### 集成
+
+- **LLM**：Anthropic 兼容（MiniMax） / OpenAI 兼容（DeepSeek） / 任意 OpenAI 兼容端点 / Mock
+- **搜索**：Bocha AI / DuckDuckGo / mmx-cli，自适应调度 + 失败隔离
+- **图存储**：FalkorDB 主存 + `associations.json` 降级
+- **Embedding**：任意 OpenAI 兼容嵌入服务 + BM25 混合
+- **外部 Skills**：minimax-pdf / pptx-generator / minimax-docx / knowledge-digest
+
+### 工程
+
+- **Protocol 反转**：`domain` 零 IO，`infrastructure` 通过 Protocol 反哺
+- **薄 API / CLI**：业务逻辑全部下沉到 `application/`
+- **异步锁**：per-event-loop 单例保护图谱写
+- **测试覆盖**：630 unit + 67 integration
+- **前端**：Vue 3 + Vite + TypeScript + Element Plus + Pinia + D3 + Mermaid
+
+## v0.x → v1.0 迁移要点
+
+如果你是从早期 0.x 版本（kg_deepagents_demo）迁移：
+
+| 变化 | 影响 |
+| --- | --- |
+| 包名改为 `kg-engine` | 旧 `python -m kg_deepagents_demo` 失效 |
+| 端口改 8888（`KG_API_PORT`） | 旧 8000 失效 |
+| API 路由统一加 `/api` 前缀 | 旧路径需更新 |
+| FalkorDB 替代部分 `associations.json` 读写 | 降级模式兼容旧数据 |
+| 工具数从 25 扩到 53 | Agent 行为更丰富，prompt 兼容性需验证 |
+| 5 阶段流水线替代旧 3 阶段 | 生成速度变慢，但质量更高 |
+
+迁移步骤：
+
+1. 备份 `workspace/`
+2. 升级代码 + 依赖
+3. 复制 `.env`（保留密钥）
+4. 跑一次 `pytest tests/integration` 验证基础能力
+5. 重启服务，观察 `/api/health` 状态
+
+## Roadmap（公开）
+
+### v1.1（计划）
+
+- [ ] 用户系统 + API Key 鉴权
+- [ ] 节点档案 UI（dossier 可视化）
+- [ ] 提示词卡片 v1.1 启用（按评估结果）
+- [ ] FalkorDB Cloud 适配
+
+### v1.2（探索）
+
+- [ ] DomainPack 第二、第三个实现（novel / recipe）
+- [ ] 多模态嵌入（图片 / 音频）
+- [ ] 流水线可视化（前端 DAG 编辑器）
+
+### v2.0（远景）
+
+- [ ] 多租户
+- [ ] 联邦（多 BoundlessKG 实例互查）
+- [ ] 实时协作（CRDT）
+
+## 设计原则变更记录
+
+BoundlessKG 维护以下设计原则，破坏任一条都需要 major 版本 + 文档说明：
+
+1. 零硬编码密钥
+2. Protocol 反转依赖
+3. 单一异步锁
+4. 薄 API / CLI
+5. 领域层纯净
+6. 事件驱动时间线
+7. 提示词卡片中间件
+8. FalkorDB 是加速层不是真相源
+
+详见 [设计原则](/development/principles)。
+
+## 反馈与贡献
+
+- GitHub Issues：报告 bug / 请求功能
+- GitHub PR：贡献代码（参考 [贡献指南](/development/principles)）
+- GitHub Discussions：提问 / 分享用例

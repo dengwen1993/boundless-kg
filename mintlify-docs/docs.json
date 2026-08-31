@@ -1,0 +1,76 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "BoundlessKG",
+  "description": "给定任意主题，自动生成可浏览、可检索、可对话的结构化知识图谱。",
+  "colors": {
+    "primary": "#0F766E",
+    "light": "#14B8A6",
+    "dark": "#0D9488"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "notFound": "not-found",
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "开始",
+            "pages": ["index", "getting-started/introduction", "getting-started/installation", "getting-started/configuration", "getting-started/launch", "getting-started/hello-world"]
+          },
+          {
+            "group": "核心概念",
+            "pages": ["concepts/architecture", "concepts/layering", "concepts/graph-model", "concepts/association-model", "concepts/event-bus", "concepts/agent-system", "concepts/workspace"]
+          },
+          {
+            "group": "使用指南",
+            "pages": ["guides/generation-pipeline", "guides/notes", "guides/resources", "guides/plans", "guides/dossiers", "guides/cards", "guides/uploads", "guides/sse-chat", "guides/concurrency"]
+          },
+          {
+            "group": "集成",
+            "pages": ["integrations/llm-providers", "integrations/search-backends", "integrations/falkordb", "integrations/embedding", "integrations/frontend", "integrations/skills"]
+          }
+        ]
+      },
+      {
+        "tab": "API 参考",
+        "groups": [
+          {
+            "group": "概览",
+            "pages": ["api-reference/overview"]
+          },
+          {
+            "group": "领域核心",
+            "pages": ["api-reference/graph", "api-reference/notes", "api-reference/resources", "api-reference/plans", "api-reference/timeline"]
+          },
+          {
+            "group": "记忆与关联",
+            "pages": ["api-reference/memory", "api-reference/associations", "api-reference/search"]
+          },
+          {
+            "group": "Agent 与文件",
+            "pages": ["api-reference/agent", "api-reference/uploads"]
+          }
+        ]
+      },
+      {
+        "tab": "部署与开发",
+        "groups": [
+          {
+            "group": "部署",
+            "pages": ["deployment/docker", "deployment/wsl2", "deployment/env-vars", "deployment/production", "deployment/monitoring"]
+          },
+          {
+            "group": "开发",
+            "pages": ["development/structure", "development/principles", "development/testing", "development/add-tool", "development/add-provider", "development/add-skill"]
+          },
+          {
+            "group": "Cookbook 与其他",
+            "pages": ["cookbook/academic", "cookbook/product", "cookbook/tech-decision", "cookbook/multi-domain", "faq", "changelog"]
+          }
+        ]
+      }
+    ]
+  }
+}

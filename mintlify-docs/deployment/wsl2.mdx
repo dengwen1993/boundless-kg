@@ -1,0 +1,190 @@
+---
+title: "WSL2 安装"
+description: "Windows 11 + WSL2 + Ubuntu 24.04 开发环境搭建"
+---
+
+## 为什么用 WSL2
+
+Windows 原生 Python + Node 经常遇到：
+
+- 路径包含空格 / 中文 → 各种第三方包报错
+- 文件 IO 慢（NTFS vs ext4）
+- 进程间通信差（fork/spawn 行为不一致）
+
+WSL2（Windows Subsystem for Linux 2）跑真 Linux 内核，体验等同于 Ubuntu 服务器。
+
+## 安装 WSL2
+
+### 1. 一行安装（Windows 11）
+
+```powershell
+wsl --install
+```
+
+默认装 Ubuntu 24.04 LTS。
+
+### 2. 重启并创建用户
+
+首次启动会提示创建 UNIX 用户名 / 密码。
+
+### 3. 验证
+
+```bash
+wsl --status
+# 默认发行版: Ubuntu
+# 版本: 2
+```
+
+## Python 环境
+
+### 1. 安装 Python 3.12
+
+```bash
+sudo apt update
+sudo apt install -y python3.12 python3.12-venv python3.12-dev build-essential
+```
+
+### 2. 创建 venv（必须在 WSL 内）
+
+```bash
+# 进入项目（注意路径在 WSL 内）
+cd /home/&lt;user&gt;/projects/boundless_kg
+
+# 创建 venv
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 升级 pip
+pip install --upgrade pip
+
+# 安装项目
+pip install -e ".[dev,deepagents]"
+```
+
+⚠️ **不要在 `/mnt/c/...` 创建 venv**——Windows 文件系统不支持符号链接，会失败。
+
+## Node 环境
+
+```bash
+# 推荐 nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+source ~/.bashrc
+
+nvm install 20
+nvm use 20
+
+# 验证
+node --version
+npm --version
+```
+
+## FalkorDB（Docker）
+
+### 选项 A：Docker Desktop + WSL2 集成
+
+Docker Desktop 设置 → Resources → WSL Integration → 启用 Ubuntu。
+
+```bash
+docker run -d --name falkordb -p 6379:6379 falkordb/falkordb:latest
+```
+
+### 选项 B：直接在 WSL 内安装 Docker Engine
+
+如果不使用 Docker Desktop，可以在 WSL 内直接安装 Docker Engine：
+
+```bash
+# 安装 Docker Engine（不需要 Docker Desktop）
+sudo apt update
+sudo apt install -y docker.io
+sudo usermod -aG docker $USER
+# 重新登录使组权限生效
+exit
+
+# 启动 Docker 服务
+sudo service docker start
+
+# 运行 FalkorDB
+docker run -d --name falkordb -p 6379:6379 falkordb/falkordb:latest
+```
+
+## 文件路径建议
+
+### 工作区放在 WSL 内
+
+```bash
+# 推荐
+/home/&lt;user&gt;/projects/boundless_kg
+```
+
+### 编辑器（VS Code Remote - WSL）
+
+```bash
+# 在 WSL 内
+code .
+```
+
+VS Code 自动启用 Remote-WSL 扩展，所有命令跑在 Linux 容器里。
+
+### 不要把项目放在 `/mnt/c/...`
+
+理由：
+
+1. Python venv 符号链接失败
+2. 文件 IO 慢 10x
+3. 行尾符问题（CRLF vs LF）
+
+## 性能调优
+
+### WSL2 内存限制
+
+`%UserProfile%\.wslconfig`：
+
+```ini
+[wsl2]
+memory=8GB
+processors=4
+swap=2GB
+```
+
+重启 WSL：`wsl --shutdown`
+
+### 文件 IO 加速
+
+把项目放在 WSL ext4 文件系统，不要跨 `/mnt/c/`。
+
+## 常见问题
+
+<AccordionGroup>
+  <Accordion title="Docker 命令找不到" icon="circle-xmark">
+    Docker Desktop 没启用 WSL2 集成。设置 → Resources → WSL Integration → 勾选 Ubuntu。
+  </Accordion>
+  <Accordion title="pip install 慢" icon="hourglass">
+    ```bash
+    pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+    ```
+  </Accordion>
+  <Accordion title="npm install 慢">
+    ```bash
+    npm config set registry https://registry.npmmirror.com
+    ```
+  </Accordion>
+  <Accordion title="Git CRLF 问题">
+    ```bash
+    git config --global core.autocrlf input
+    ```
+  </Accordion>
+  <Accordion title="VS Code 看不到 WSL 文件">
+    装 Remote - WSL 扩展，从 WSL 终端 `code .` 启动。
+  </Accordion>
+</AccordionGroup>
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Docker 部署" icon="docker" href="/deployment/docker">
+    完整容器化部署
+  </Card>
+  <Card title="配置" icon="gear" href="/getting-started/configuration">
+    .env 配置
+  </Card>
+</CardGroup>

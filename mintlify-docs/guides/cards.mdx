@@ -1,0 +1,174 @@
+---
+title: "提示词卡片"
+description: "意图驱动的 System Prompt 增强机制"
+---
+
+## 设计动机
+
+System prompt 一旦写死就有三个问题：
+
+1. **变更成本高**：改一行要重启整个 Agent
+2. **上下文无关**：所有场景共用同一段废话
+3. **难测试**：改 prompt 没办法 A/B
+
+提示词卡片（Prompt Cards）把这三件事解掉：
+
+- 每张卡片是一个**独立的 Markdown 文件**（行为规范）
+- 由 `CardsMiddleware` 按**触发条件 + 当前工具栈**动态筛选
+- 命中后注入到 SystemMessage 末尾
+- 通过 CLI / API 热更新，不用重启
+
+## 数据模型
+
+```python
+class TriggerCondition(BaseModel):
+    keywords: list[str] = []          # 包含任一关键词
+    tools_in_use: list[str] = []      # 当前调用栈含这些工具
+    user_intent: list[str] = []       # 意图分类（来自 IntentParser）
+
+class Card(BaseModel):
+    id: str                           # 文件名（无扩展名）
+    title: str
+    body: str                         # Markdown
+    triggers: TriggerCondition
+    priority: int = 100               # 数字越小越优先
+    enabled: bool = True
+    updated_at: datetime
+```
+
+## 存储
+
+```text
+src/agent/cards/data/&lt;card_id&gt;.md
+```
+
+或自定义目录：
+
+```bash .env
+KG_AGENT_CARDS_DIR=./my-cards       # 相对路径：相对 KG_KB_ROOT
+```
+
+## 文件格式
+
+```markdown src/agent/cards/data/citation-hygiene.md
+---
+title: 引用卫生
+priority: 10
+triggers:
+  keywords: [引用, 论文, reference, cite, citation]
+  tools_in_use: [kg_add_learning_resources, kg_add_edge]
+---
+
+# 引用卫生
+
+当用户要求添加资源 / 关联时，必须遵守：
+
+1. URL 必须可访问（HEAD 请求 200）
+2. 优先论文原文 > 二次解读
+3. 引用时附上作者 + 年份
+4. 如已有重复资源，合并而非新建
+```
+
+frontmatter 部分是元数据，正文是行为规范。
+
+## 匹配与注入
+
+```python
+class CardsMiddleware:
+    def __init__(self, library: CardLibrary):
+        self.library = library
+
+    async def before_llm(self, messages, current_tools: list[str], ...):
+        # 1) 检测触发条件
+        triggers = detect_triggers(
+            user_message=messages[-1].content,
+            current_tools=current_tools,
+            parsed_intent=self.intent_parser.parse(...),
+        )
+        # 2) 匹配卡片
+        matched = self.library.match(triggers)
+        # 3) 按 priority 排序，取前 N 张
+        top = sorted(matched, key=lambda c: c.priority)[:5]
+        # 4) 注入到 SystemMessage
+        if top:
+            messages[0] = inject_into_system_message(messages[0], top)
+        return messages
+```
+
+## CLI
+
+```bash
+kg-engine cards list
+kg-engine cards add citation-hygiene \
+  --title "引用卫生" \
+  --body "..." \
+  --triggers keywords=引用,论文 tools_in_use=kg_add_learning_resources \
+  --priority 10
+kg-engine cards view citation-hygiene
+kg-engine cards delete citation-hygiene
+```
+
+## API
+
+```http
+GET    /api/cards
+POST   /api/cards                {id, title, body, triggers, priority}
+GET    /api/cards/{id}
+DELETE /api/cards/{id}
+```
+
+## Agent 工具
+
+```python
+@tool
+async def kg_add_card(id: str, title: str, body: str, triggers: dict, priority: int = 100) -> str: ...
+
+@tool
+async def kg_list_cards() -> str: ...
+
+@tool
+async def kg_view_card(id: str) -> str: ...
+
+@tool
+async def kg_delete_card(id: str) -> str: ...
+```
+
+## 启用开关
+
+默认禁用（v1.0 rollout 风险控制）：
+
+```bash .env
+KG_AGENT_CARDS_ENABLED=true
+KG_AGENT_CARDS_DEBUG=true    # 在 SSE 流中暴露激活的卡片列表
+```
+
+## 调试
+
+打开 `KG_AGENT_CARDS_DEBUG=true` 后，SSE 流末尾会附带：
+
+```json
+{
+  "type": "cards_debug",
+  "active_cards": ["citation-hygiene", "structure-format"],
+  "matched_triggers": {
+    "citation-hygiene": ["keywords:引用", "tools:kg_add_learning_resources"]
+  }
+}
+```
+
+## 设计原则
+
+1. **行为而非工具说明**：卡片写"该做什么 / 不该做什么"，不写 API 用法（API 由工具描述承担）
+2. **可独立启用**：单张卡片可禁用，不影响其他
+3. **可热更新**：增删改不必重启 Agent
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Agent 系统" icon="robot" href="/concepts/agent-system">
+    CardsMiddleware 在 middleware 链中的位置
+  </Card>
+  <Card title="节点档案" icon="user-secret" href="/guides/dossiers">
+    另一种动态注入（per-node）
+  </Card>
+</CardGroup>

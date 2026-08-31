@@ -1,0 +1,291 @@
+---
+title: "FAQ"
+description: "常见问题与排查"
+---
+
+## 安装与启动
+
+<AccordionGroup>
+  <Accordion title="No module named kg_engine" icon="circle-xmark">
+    项目实际打包的包是 `src/`，控制台脚本名是 `kg-engine`。`python -m kg_engine` **不能**用，必须：
+
+    ```bash
+    python -m src serve           # 方式 A
+    kg-engine serve                # 方式 B（需先 pip install -e .）
+    python -m uvicorn src.api.server:create_app --factory  # 方式 C
+    ```
+  </Accordion>
+
+  <Accordion title="pip install 报权限错误" icon="key">
+    用 venv：
+
+    ```bash
+    python3.12 -m venv .venv
+    source .venv/bin/activate
+    pip install -e ".[dev,deepagents]"
+    ```
+
+    不要 `sudo pip install`。
+  </Accordion>
+
+  <Accordion title="uvicorn 启动后 lifespan 没触发" icon="spinner">
+    缺少 `--factory`：
+
+    ```bash
+    # ❌ 错误
+    uvicorn src.api.server:app
+
+    # ✅ 正确
+    uvicorn src.api.server:create_app --factory
+    ```
+
+    没有 `--factory`，lifespan 不跑 → Agent 不预构建 → `/api/health` 永远 `building`。
+  </Accordion>
+</AccordionGroup>
+
+## LLM 相关
+
+<AccordionGroup>
+  <Accordion title="MiniMax / DeepSeek 报 401 / 403" icon="key">
+    1. 检查 `.env` 的 key 是否正确（注意前后空格）
+    2. `ANTHROPIC_BASE_URL` / `DEEPSEEK_BASE_URL` 是否带协议头（`https://`）
+    3. 账号是否有余额 / 权限
+
+    ```bash
+    # 验证 key 有效
+    curl -H "Authorization: Bearer $ANTHROPIC_API_KEY" \
+      https://api.minimaxi.com/anthropic/v1/messages \
+      -d '...'
+    ```
+  </Accordion>
+
+  <Accordion title="LLM 调用超时（504）" icon="hourglass">
+    调大超时：
+
+    ```bash .env
+    KG_LLM_TIMEOUT_SEC=600
+    ```
+
+    或者调小思考深度：
+
+    ```bash .env
+    KG_LLM_REASONING_EFFORT=low
+    ```
+
+    如果是 reasoning-mandatory 模型（`deepseek-v4-flash`），无法完全关掉思考，只能调深度。
+  </Accordion>
+
+  <Accordion title="想换 LLM 提供方" icon="repeat">
+    ```bash .env
+    # 改这一行就行
+    KG_LLM_PROVIDER=deepseek
+
+    # 拆分策略：Agent 聊 MiniMax，生成 DeepSeek
+    KG_LLM_PROVIDER=minimax
+    KG_GENERATION_LLM_PROVIDER=deepseek
+    KG_NOTE_LLM_PROVIDER=deepseek
+    ```
+
+    详见 [LLM 提供方](/integrations/llm-providers)。
+  </Accordion>
+
+  <Accordion title="LLM 返回非法 JSON" icon="warning">
+    `kg_repair_json` 工具会自动兜底。如仍失败：
+
+    1. 提示词里强制要求 JSON 输出
+    2. 降低 temperature（`KG_LLM_TEMPERATURE=0.1`，如果有）
+    3. 换更强的模型
+  </Accordion>
+</AccordionGroup>
+
+## FalkorDB 相关
+
+<AccordionGroup>
+  <Accordion title="FalkorDB 连不上" icon="database">
+    1. 容器是否启动：
+       ```bash
+       docker ps | grep falkordb
+       ```
+    2. 配置是否正确：
+       ```bash
+       python -c "from src.config import get_falkordb_settings; print(get_falkordb_settings())"
+       ```
+    3. 临时降级：
+       ```bash .env
+       KG_ASSOCIATIONS_SOURCE=json
+       ```
+
+    详见 [FalkorDB 集成 → 降级策略](/integrations/falkordb)。
+  </Accordion>
+
+  <Accordion title="数据同步不一致" icon="warning">
+    手动触发全量同步：
+
+    ```bash
+    curl -X POST http://localhost:8888/api/associations/&lt;domain&gt;/sync
+    ```
+
+    或在 CLI：
+
+    ```bash
+    kg-engine associations sync &lt;domain&gt;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## 搜索相关
+
+<AccordionGroup>
+  <Accordion title="DuckDuckGo 返回 0 结果" icon="search">
+    大概率代理问题：
+
+    ```bash .env
+    DDG_PROXY=http://127.0.0.1:7897
+    ```
+
+    或切到 Bocha（中文搜索质量更好）。
+  </Accordion>
+
+  <Accordion title="Bocha 401" icon="key">
+    API key 失效或没设。空 key 静默跳过，不报错。
+
+    检查：
+
+    ```bash
+    echo $BOCHA_API_KEY
+    ```
+
+    设置后重启服务。
+  </Accordion>
+
+  <Accordion title="想强制走某个后端" icon="filter">
+    ```bash
+    # Agent 内
+    kg_set_search_channel(channel="bocha")
+
+    # 系统级（关闭自适应）
+    KG_SEARCH_ADAPTIVE=false
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## 流水线与生成
+
+<AccordionGroup>
+  <Accordion title="生成卡在第 3 阶段" icon="hourglass">
+    LLM 慢或超时：
+
+    1. 看日志：`docker compose logs -f api | grep "stage 3"`
+    2. 调小并发：`KG_SEARCH_MAX_CONCURRENCY=3`
+    3. 调大超时：`KG_LLM_TIMEOUT_SEC=600`
+    4. 简化方向：`--direction-hint=technology,intermediate,overview`
+  </Accordion>
+
+  <Accordion title="生成质量分一直 fair / poor" icon="chart-line">
+    1. 调小方向深度：`--direction-hint=technology,expert,overview`（先生成骨架，再补细节）
+    2. 手动加节点补全图谱
+    3. 让 Agent 跑 `kg_fix_links` 自动补反向链接
+    4. 让 Agent 给没 summary 的节点跑 `kg_generate_note`
+  </Accordion>
+
+  <Accordion title="想强制重跑某个阶段" icon="refresh">
+    删除 pipeline state：
+
+    ```bash
+    rm -rf workspace/_pipeline/&lt;task_id&gt;/
+    ```
+
+    重新跑 `kg-engine generate &lt;topic&gt;`。
+  </Accordion>
+</AccordionGroup>
+
+## 前端相关
+
+<AccordionGroup>
+  <Accordion title="看不到刚生成的领域" icon="eye">
+    刷新页面（F5）。前端缓存了 `domains` 列表。
+  </Accordion>
+
+  <Accordion title="SSE 一秒断开" icon="broken-chain">
+    反向代理 buffer：
+
+    ```nginx
+    location /api/agent/invoke {
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_set_header Connection '';
+        proxy_http_version 1.1;
+    }
+    ```
+
+    Caddy 同理：`reverse_proxy api:8888 { flush_interval -1 }`
+  </Accordion>
+
+  <Accordion title="大图缩放过小" icon="magnifying-glass">
+    d3.tree fit 缩到 0.04 的已知问题。修复见 `frontend-vue/src/components/GraphCanvas.vue`：
+
+    ```typescript
+    const scale = Math.max(0.3, Math.min(2, fullSize / bounds))
+    ```
+
+    切领域时不要 reset zoom，只 fit。
+  </Accordion>
+</AccordionGroup>
+
+## 开发与扩展
+
+<AccordionGroup>
+  <Accordion title="怎么加一个新工具？" icon="plus">
+    详见 [添加新 LangChain 工具](/development/add-tool)。记得更新 `test_tool_count_consistency.py`。
+  </Accordion>
+
+  <Accordion title="怎么加一个新的 LLM 提供方？" icon="plug">
+    详见 [添加新 LLM Provider](/development/add-provider)。
+  </Accordion>
+
+  <Accordion title="怎么加一个新的搜索后端？" icon="search">
+    实现 `src/infrastructure/search/base.py::SearchClient`，在 `preference.py` 注册。
+  </Accordion>
+
+  <Accordion title="测试怎么跑？" icon="play">
+    ```bash
+    pytest -q                              # 全部
+    pytest tests/unit -q                   # 仅单元
+    pytest tests/integration -q            # 集成（需 FalkorDB）
+    pytest -k &lt;keyword&gt; -xvs               # 调试单个
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## 其他
+
+<AccordionGroup>
+  <Accordion title="支持 i18n 吗？" icon="language">
+    文档站点支持（通过 Mintlify 配置）。代码注释主要是中文 + 英文混合。
+  </Accordion>
+
+  <Accordion title="License？" icon="scale-balanced">
+    Apache License 2.0（见仓库 `LICENSE` 文件）。自由使用、修改、分发，含专利授权；需保留版权声明与 NOTICE，生产部署需自行评估合规。
+  </Accordion>
+
+  <Accordion title="性能基准？" icon="gauge">
+    | 量级 | 性能 |
+    | --- | --- |
+    | 100 节点图谱 | 生成 1-2 min |
+    | 1000 节点 | 生成 5-10 min |
+    | global 检索 | &lt;30 ms |
+    | neighbors depth=2 | &lt;50 ms |
+
+    实测数字取决于 LLM 速度 + FalkorDB 内存。
+  </Accordion>
+</AccordionGroup>
+
+## 找不到答案？
+
+1. 看 [事件总线](/concepts/event-bus) 查日志
+2. 看 [监控](/deployment/monitoring) 看健康指标
+3. GitHub Issues 搜类似问题
+4. 提新 issue，附上：
+   - `kg-engine --version`
+   - `KG_LOG_LEVEL=DEBUG` 的相关日志
+   - 复现步骤

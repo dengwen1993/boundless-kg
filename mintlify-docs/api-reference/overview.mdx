@@ -1,0 +1,275 @@
+---
+title: "API 总览"
+description: "REST API 路由表、鉴权、CORS、OpenAPI"
+---
+
+## 基础信息
+
+- **Base URL**: `http://&lt;host&gt;:<KG_API_PORT>`（默认 `http://localhost:8888`）
+- **统一前缀**: `/api`
+- **数据格式**: JSON（除文件上传与 SSE 流）
+- **OpenAPI**: `/openapi.json` 自动生成（运行时导出）
+- **Swagger UI**: `/docs`
+- **健康检查**: `/api/health`
+- **版本**: FastAPI `2.0.0`
+
+## 鉴权
+
+当前版本**无内置鉴权层**。生产部署建议：
+
+1. 前置 nginx / Caddy 做 Basic Auth 或 OIDC
+2. 容器内仅监听内网端口
+3. `KG_API_CORS_ORIGINS` 严格白名单
+
+未来计划：API Key + 用户系统（v1.1 计划）。
+
+## CORS
+
+```bash .env
+KG_API_CORS_ORIGINS=["http://localhost:5175","https://yourdomain.com"]
+```
+
+支持 JSON 数组或 CSV。
+
+## 错误响应
+
+```json
+{
+  "error": {
+    "code": "DOMAIN_NOT_FOUND",
+    "message": "Domain 'rag' does not exist",
+    "details": {}
+  }
+}
+```
+
+| HTTP | 含义 |
+| --- | --- |
+| 400 | 请求参数错误（如父节点不存在、文件名非法） |
+| 404 | 资源 / 节点 / 领域不存在 |
+| 409 | 状态冲突（如重命名 / URL 重复） |
+| 413 | 文件过大（tmp 上传 200 MiB / 图片 10 MiB） |
+| 422 | Pydantic 校验失败 |
+| 500 | 内部错误 |
+| 502 | LLM / FalkorDB 上游失败 |
+| 503 | Agent 未构建完成 或 FalkorDB 不可用 |
+
+## 子模块路由总览
+
+按子模块分组，详见左侧导航。
+
+| 子模块 | 路径前缀 | 关键端点 | 说明 |
+| --- | --- | --- | --- |
+| Graph | `/api/domains`, `/api/graph`, `/api/nodes` | `GET /api/graph/{domain}`、`POST /api/nodes`、`PATCH /api/nodes/{domain}?name=X` | 领域列表 + 装饰图谱 + 节点 CRUD |
+| Notes | `/api/notes`, `/api/notes-index` | `GET/PUT /api/notes/{domain}/{node_name}`、`POST .../generate` | 笔记 CRUD + LLM 生成 + 子节点摘要索引 |
+| Resources | `/api/resources`, `/api/study-materials` | `POST /api/resources/{domain}/{node_name}/upload`、`GET .../study-materials/{filename:path}` | Web 资源 + 用户上传 + 学习资料 |
+| Plans | `/api/plans` | `POST /api/plans/{domain}/{node_name}`、`PUT .../actions/{action_id}` | 学习计划 + Action 状态机 |
+| Timeline | `/api/timeline` | `GET /api/timeline/{domain}` | JSONL-backed 活动时间线 |
+| Memory | `/api/memory` | `GET /api/memory/sessions`、`GET /api/memory/search`、`GET /api/memory/recall` | 会话文件元信息 + 关键词搜索 + 近期召回 |
+| Associations | `/api/associations` | `GET .../{domain}`、`POST .../{domain}/sync`、`POST .../manual` | 关联图 CRUD + 派生 + 手动增删边/概念 |
+| Search | `/api/search`, `/api/graph/{domain}/neighbors` | `GET /api/search/{domain}/global`、`GET /api/graph/{domain}/neighbors` | BM25 + 向量混合检索 + FalkorDB 图遍历 |
+| Agent | `/api/agent` | `POST /api/agent/invoke` (SSE)、`POST /api/agent/session` | deepagents 流式对话 + 会话管理 |
+| Tmp Uploads | `/api/tmp` | `POST /api/tmp/upload`、`POST /api/tmp/auto-place`、`GET /api/tmp/parse/{filename}` | 临时文件（chat scratch），按 TTL 自动清理 |
+
+## 完整路由表
+
+按 HTTP 方法 + 路径排列，所有路径均以 `/api` 为前缀。
+
+### Graph
+
+```http
+GET    /api/domains                                      # 所有领域（含 node_count）
+GET    /api/graph/{domain}?decorated=true                # 装饰后的图谱（默认开）
+POST   /api/graph/{domain}/fix-links                     # 补齐反向 child 边
+GET    /api/graph/{domain}/export-zip                    # 整个领域打 ZIP 流
+POST   /api/nodes                                        # 新增节点（domain/name/parent/links）
+PATCH  /api/nodes/{domain}?name=                         # 改名 / 更新链接（query: name）
+DELETE /api/nodes/{domain}?name=                         # 删除节点 + 清理引用（query: name）
+```
+
+### Notes
+
+```http
+GET    /api/notes/{domain}?node=                         # 读 note.md（缺失返回 needs_generation）
+PUT    /api/notes/{domain}?node=                         # 写 note.md
+POST   /api/notes/{domain}/generate?node=                # LLM 生成笔记
+GET    /api/notes-index/{domain}?node=                   # 子节点摘要索引
+```
+
+### Resources
+
+```http
+GET    /api/resources/{domain}?node=                                # web + uploads + study-materials
+POST   /api/resources/{domain}/web?node=                            # 新增 Web 资源
+PUT    /api/resources/{domain}/web?node=&original_url=              # 编辑（按 URL 定位）
+DELETE /api/resources/{domain}/web?node=&url=                       # 删除 Web 资源
+POST   /api/resources/{domain}/upload?node=                         # multipart 上传文件
+PUT    /api/resources/{domain}/upload/{filename}?node=              # 编辑 upload 元数据
+DELETE /api/resources/{domain}/upload/{filename}?node=              # 删除 upload
+GET    /api/resources/{domain}/download/{filename}?node=            # 下载 / 预览
+GET    /api/resources/{domain}/study-materials?node=&path=          # 列出 study_materials 子目录
+GET    /api/resources/{domain}/study-materials/{filename:path}?node=# 下载 / 预览嵌套文件
+```
+
+### Plans
+
+```http
+GET    /api/plans/{domain}?node=&date=                              # 列出计划（node 空 = 整个域）
+POST   /api/plans/{domain}?node=                                    # 新增计划（含 actions）
+PUT    /api/plans/{domain}/plan/{plan_id}?node=                     # 改 goal/note/date
+DELETE /api/plans/{domain}/plan/{plan_id}?node=                     # 删整条计划
+POST   /api/plans/{domain}/plan/{plan_id}/actions?node=             # 追加 action
+PUT    /api/plans/{domain}/plan/{plan_id}/actions/{action_id}?node= # 改 action 状态/内容
+DELETE /api/plans/{domain}/plan/{plan_id}/actions/{action_id}?node= # 删 action
+```
+
+### Timeline
+
+```http
+GET    /api/timeline/{domain}?date=&node=&type=                     # 活动事件（按 ts 倒序）
+```
+
+### Memory
+
+```http
+GET    /api/memory/sessions?days=14                                 # 会话文件列表
+GET    /api/memory/search?query=&days=7&max_results=10              # 关键词搜索（含上下文）
+GET    /api/memory/recall?lines=60                                  # 最近一次会话尾部
+GET    /api/memory/session/{session_id}?date=                       # 读完整会话 JSONL
+```
+
+### Associations
+
+```http
+GET    /api/associations/{domain}                                   # 完整关联图（优先 FalkorDB）
+GET    /api/associations/{domain}/concepts                          # 仅 concepts
+GET    /api/associations/{domain}/resources                         # 仅 resources
+GET    /api/associations/{domain}/edges                             # 仅 edges
+GET    /api/associations/{domain}/neighbors/{node}?hops=&relation=&direction=any  # BFS 邻居
+GET    /api/associations/{domain}/statistics                        # 统计
+POST   /api/associations/{domain}/sync                              # 全量派生
+POST   /api/associations/{domain}/sync-node?                        # 单节点派生（待定 body）
+POST   /api/associations/{domain}/flush-llm                         # 立即 flush LLM buffer
+POST   /api/associations/{domain}/extract-now                       # 立即跑全量 LLM 抽取
+DELETE /api/associations/{domain}                                   # 清空（associations.json + FalkorDB）
+POST   /api/associations/{domain}/manual                            # 手动加边（概念 ↔ 概念）
+DELETE /api/associations/{domain}/manual?source=&target=&relation=  # 手动删边
+DELETE /api/associations/{domain}/concept?name=                     # 删概念节点
+```
+
+### Search
+
+```http
+GET    /api/search/{domain}?q=&top_k=10                             # 域内混合检索
+GET    /api/search/{domain}/global?q=&top_k=10                      # 域内 + 1 跳邻居
+GET    /api/graph/{domain}/neighbors?node=&hops=1                   # FalkorDB 图遍历
+GET    /api/graph/{domain}/statistics                               # FalkorDB 统计
+POST   /api/graph/{domain}/sync                                     # 全量同步
+POST   /api/graph/{domain}/sync-node?node=                          # 单节点同步
+```
+
+### Agent（SSE）
+
+```http
+POST   /api/agent/invoke                                            # 流式对话（multipart 含 images）
+POST   /api/agent/session                                           # mint 新 session_id
+```
+
+### Tmp Uploads（chat scratch，7 天 TTL）
+
+```http
+POST   /api/tmp/upload                                              # 上传到 .agent_memory/tmp/
+GET    /api/tmp/list                                                # 列出当前 tmp 文件
+DELETE /api/tmp/{filename}                                          # 删单个文件
+GET    /api/tmp/download/{filename}                                 # 下载 / 预览
+GET    /api/tmp/parse/{filename}?max_chars=20000                    # 抽取文本给 LLM
+POST   /api/tmp/auto-place                                          # 解析 + LLM 分类 + 入对应节点
+```
+
+### 元信息
+
+```http
+GET    /api/health                                                  # ok + agent_available + agent_error + kb_root
+GET    /api/categories                                              # 资源分类常量
+GET    /api/domain-pack                                             # DomainPack 元数据
+```
+
+## 常用端点速查
+
+```http
+GET    /api/health                          # 健康 + Agent 构建状态
+GET    /api/domains                         # 所有领域列表
+GET    /api/graph/{domain}                  # 装饰后图谱
+POST   /api/nodes                           # 添加节点
+PATCH  /api/nodes/{domain}?name=X          # 更新节点（query: name）
+DELETE /api/nodes/{domain}?name=X          # 删除节点（query: name）
+POST   /api/agent/invoke                    # SSE 流式对话
+GET    /api/memory/search?query=...        # 历史会话关键词搜索
+```
+
+完整接口见各子模块页面。
+
+## OpenAPI
+
+运行时拉取：
+
+```bash
+curl http://localhost:8888/openapi.json | jq . > openapi.json
+```
+
+或者用 Swagger UI：&lt;http://localhost:8888/docs&gt;。
+
+## 限流
+
+当前**无内置限流**。生产建议：
+
+- nginx `limit_req_zone`
+- 容器层 ingress rate limit
+
+## 分页
+
+多数 GET 端点支持以下查询参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `limit` | `50` | 返回条数上限 |
+| `offset` | `0` | 偏移量 |
+| `days` | `7` | 时间窗（仅 memory/sessions、memory/search） |
+
+典型响应：
+
+```json
+{
+  "items": [],
+  "total": 123,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+## 设计约定
+
+| 项 | 约定 |
+| --- | --- |
+| 节点 / 资源命名 | 凡是可能含 `/` 的字段（节点名、文件名等）一律走 **query 参数**，不走 path segment |
+| 时间 | 所有 timestamp 字段为 ISO 8601 秒精度（无时区后缀） |
+| 鉴权 | 无；生产部署必须在网关做 |
+| 幂等性 | `PUT` / `PATCH` / `DELETE` 幂等；`POST` 通常非幂等 |
+| 大文件 | 单文件上限 200 MiB；单图 10 MiB；单请求图片总上限 50 MiB |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Graph & Nodes API" icon="diagram-project" href="/api-reference/graph">
+    图谱与节点完整接口
+  </Card>
+  <Card title="Agent SSE API" icon="stream" href="/api-reference/agent">
+    流式对话帧格式
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api-reference/search">
+    混合检索 + 图遍历
+  </Card>
+  <Card title="Uploads API" icon="cloud-arrow-up" href="/api-reference/uploads">
+    临时文件 / 自动归类
+  </Card>
+</CardGroup>

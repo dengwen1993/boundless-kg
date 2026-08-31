@@ -1,0 +1,113 @@
+---
+title: "配置"
+description: "环境变量分组与最小可用 .env 模板"
+---
+
+## 最小可用配置
+
+### 方案 A：MiniMax（Anthropic 兼容）
+
+```bash .env
+ANTHROPIC_API_KEY=sk-...
+ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
+ANTHROPIC_MODEL=MiniMax-M3-512k
+KG_LLM_PROVIDER=minimax
+```
+
+适用场景：中文 + 长上下文。
+
+### 方案 B：DeepSeek（OpenAI 兼容）
+
+```bash .env
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL_CHAT=deepseek-v4-flash
+DEEPSEEK_MODEL_V4=deepseek-v4-pro
+KG_LLM_PROVIDER=deepseek
+```
+
+适用场景：图谱生成 / 推理密集型任务。
+
+### 方案 C：拆分（Agent 聊 MiniMax / 生成跑 DeepSeek）
+
+```bash .env
+ANTHROPIC_API_KEY=sk-...
+DEEPSEEK_API_KEY=sk-...
+KG_LLM_PROVIDER=minimax            # Agent 对话
+KG_GENERATION_LLM_PROVIDER=deepseek # 图谱生成 / 笔记 / 资源分类
+KG_NOTE_LLM_PROVIDER=deepseek-chat      # 仅笔记（使用 chat 模型层级）
+```
+
+适用场景：成本敏感，对生成质量要求高，对话希望更快。
+
+## 变量分组速览
+
+完整清单见 [环境变量全集](/deployment/env-vars)。下表是**最常用的 30%**：
+
+### LLM
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_LLM_PROVIDER` | `mock` | Agent 聊天：`mock` / `minimax` / `deepseek` / `openai` |
+| `KG_GENERATION_LLM_PROVIDER` | （空 → 回退） | 图谱生成 / 笔记 / 资源分类 |
+| `KG_NOTE_LLM_PROVIDER` | （空 → 回退） | 仅笔记生成 |
+| `KG_LLM_TIMEOUT_SEC` | `600` | 单次 LLM HTTP 超时 |
+| `KG_LLM_REASONING_EFFORT` | `low` | `low` / `medium` / `high`（控制推理模型思考深度） |
+
+### FalkorDB
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_FALKORDB_HOST` | `localhost` | FalkorDB 主机 |
+| `KG_FALKORDB_PORT` | `6379` | FalkorDB 端口 |
+| `KG_FALKORDB_ENABLED` | `true` | 全局开关 |
+| `KG_ASSOCIATIONS_SOURCE` | `auto` | `auto` / `falkordb` / `json` |
+
+### 路径
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_KB_ROOT` | `./workspace/knowledge_bases` | 知识库根 |
+| `KG_WORKSPACE_DIR` | `./workspace` | 工作区根（`_pipeline/` `_staging/` `.agent_memory/`） |
+| `KG_AGENT_MEMORY_DIR` | `.agent_memory` | Agent 记忆目录 |
+
+### 搜索
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_SEARCH_ADAPTIVE` | `true` | 自适应后端选择 |
+| `KG_SEARCH_QUARANTINE_SEC` | `21600` | 失败后端隔离时长 |
+| `BOCHA_API_KEY` | （空） | Bocha AI 搜索；空则跳过 |
+| `DDG_PROXY` | （空 → 自动检测） | DuckDuckGo 代理 |
+| `MMX_API_KEY` | （空） | mmx-cli 备用搜索 |
+
+### Agent
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_AGENT_RECURSION_LIMIT` | `250` | deepagents 递归上限 |
+| `KG_AGENT_INTERRUPT_ON_DELETE` | `true` | 删除节点前是否需要 Agent 中断 |
+| `KG_AGENT_CARDS_ENABLED` | `false` | 提示词卡片中间件 |
+| `KG_AGENT_SHELL_ENABLED` | `true` | 是否暴露 `kg_shell_exec` 沙箱 |
+
+## 设计原则
+
+1. **零硬编码密钥**：缺失即抛 `EnvironmentError`，不静默回退。
+2. **跨平台路径**：`KG_KB_ROOT` / `KG_WORKSPACE_DIR` 兼容 POSIX 绝对路径、Windows 绝对路径、相对路径，相对路径基于 CWD。
+3. **三级 LLM 角色**：agent / generation / note 三个 provider 可独立配置，回退链 `note → generation → chat`。
+
+## 验证配置
+
+```bash
+# 检查 .env 加载是否正常
+python -c "from src.config import get_settings; print(get_settings().llm_provider)"
+
+# 检查 FalkorDB 连通性
+python -c "from src.config import get_falkordb_settings; print(get_falkordb_settings())"
+```
+
+## 下一步
+
+<Card title="启动" icon="play" href="/getting-started/launch">
+  三种启动方式（控制台脚本 / uvicorn / Docker）
+</Card>

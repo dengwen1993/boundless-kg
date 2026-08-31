@@ -1,0 +1,124 @@
+---
+title: "Plans API"
+description: "学习计划 + Action 状态机"
+---
+
+## 列出计划
+
+### 节点级
+
+```http
+GET /api/plans/{domain}?node=ColBERT
+```
+
+**响应**：
+
+```json
+[
+  {
+    "id": "plan-abc",
+    "domain": "rag_检索增强生成",
+    "node": "ColBERT",
+    "title": "深入 ColBERT 学习路径",
+    "description": "...",
+    "status": "active",
+    "actions": [
+      {"id": "a1", "title": "读原论文", "status": "done", "order": 1},
+      {"id": "a2", "title": "实现简化版", "status": "in_progress", "order": 2}
+    ],
+    "created_at": "2026-08-28T12:34:56Z"
+  }
+]
+```
+
+### 领域级
+
+```http
+GET /api/plans/{domain}
+```
+
+不传 `?node=` 返回领域级计划（`node=null`）。
+
+## 创建计划
+
+```http
+POST /api/plans/{domain}
+Content-Type: application/json
+
+{
+  "node": "ColBERT",
+  "title": "深入 ColBERT 学习路径",
+  "description": "先理论后实践",
+  "actions": [
+    {"title": "读原论文"},
+    {"title": "复现关键实验"},
+    {"title": "实现简化版"}
+  ]
+}
+```
+
+**响应 201**：
+
+```json
+{...完整计划对象...}
+```
+
+## 更新计划
+
+```http
+PUT /api/plans/{domain}/{node}/{plan_id}
+Content-Type: application/json
+
+{
+  "title": "更深入的 ColBERT 学习路径",
+  "description": "...",
+  "status": "active"
+}
+```
+
+## 删除计划
+
+```http
+DELETE /api/plans/{domain}/{node}/{plan_id}
+```
+
+**行为**：删除整个计划 + 所有 actions；**不删关联资源**。
+
+## 更新 Action 状态
+
+```http
+PUT /api/plans/{domain}/{node}/{plan_id}/actions/{action_id}
+Content-Type: application/json
+
+{
+  "status": "done"
+}
+```
+
+**合法状态值**：`todo` / `in_progress` / `done` / `blocked` / `skipped`
+
+**副作用**：当所有 actions 都 `done` 或 `skipped` 时，plan.status 自动变 `completed`。
+
+## 删除 Action
+
+```http
+DELETE /api/plans/{domain}/{node}/{plan_id}/actions/{action_id}
+```
+
+## 错误码
+
+| HTTP | 含义 |
+| --- | --- |
+| 404 | 计划 / Action 不存在 |
+| 409 | 状态冲突（如已完成不能改回 todo） |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="学习计划指南" icon="book" href="/guides/plans">
+    实现 + 状态机
+  </Card>
+  <Card title="Timeline API" icon="timeline" href="/api-reference/timeline">
+    所有变更都会留痕
+  </Card>
+</CardGroup>

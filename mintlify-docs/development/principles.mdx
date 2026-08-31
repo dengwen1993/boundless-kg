@@ -1,0 +1,130 @@
+---
+title: "设计原则"
+description: "7 条工程原则 + 触达的代码 + 触达的测试"
+---
+
+## 1. 零硬编码密钥
+
+**规则**：所有密钥经 `config.require_secret()` 取值，缺失即抛 `EnvironmentError`。
+
+**触达代码**：`src/config/settings.py::require_secret()`
+
+**触达测试**：每个 LLM 客户端的单元测试都 mock 一个 None SecretStr，断言抛错。
+
+**为什么**：源码泄漏 → 密钥泄漏。硬编码密钥是 P0 安全事故。
+
+## 2. Protocol 反转依赖
+
+**规则**：`domain` 不依赖 `infrastructure`。后者通过 `Protocol` 接口反哺。
+
+**触达代码**：
+- `src/domain/protocols.py` 定义 `LLMClientProtocol` / `SearchClientProtocol` / `WikiClientProtocol`
+- `src/infrastructure/llm/*.py` 不需要 `: LLMClientProtocol`，靠鸭子类型满足
+
+**触达测试**：`tests/unit/test_protocols.py`（如果有）；实际靠业务测试间接覆盖。
+
+**为什么**：换 LLM / 搜索后端零业务改动。可测试性（mock 一个简单实现即可）。
+
+## 3. 单一异步锁
+
+**规则**：所有图谱写操作必须 `async with graph_lock():` 包住。
+
+**触达代码**：`src/infrastructure/lock.py`
+
+**触达测试**：`tests/unit/test_lock.py`
+
+**为什么**：多请求同时写 `knowledge_graph.json` 会破坏一致性（写入半截）。异步锁保证串行写。
+
+**per-event-loop 设计**：`asyncio.Lock` 不能跨 loop 复用，`@lru_cache` 会把锁绑到首次创建时的 loop，uvicorn 重启或测试间切换 loop 会失败。所以用 `dict[loop_id, Lock]`。
+
+## 4. 薄 API / CLI
+
+**规则**：`api/routes/*` 和 `cli/main.py` 只做参数解析 + 请求/响应 + 业务调用，业务逻辑全部下沉到 `application/`。
+
+**触达代码**：
+- `src/api/routes/graph.py` —— 路由层
+- `src/application/graph_service.py` —— 业务层
+
+**触达测试**：`tests/unit/test_application.py`
+
+**为什么**：路由层做业务 → 单测要 mock HTTP。业务下沉 → 业务可纯函数测试。
+
+## 5. 领域层纯净
+
+**规则**：`src/domain/*` 只依赖标准库 + pydantic。不导入 `infrastructure` / `application` / `api` / `agent`。
+
+**触达代码**：`src/domain/`
+
+**触达测试**：`tests/unit/test_domain_*.py`
+
+**为什么**：domain 是任何 IO 都能跑的核心。如果混入 IO 就废了 Protocol 反转。
+
+**检查方法**：`grep -r "from src.infrastructure" src/domain/` 应该返回空。
+
+## 6. 事件驱动时间线
+
+**规则**：所有写操作通过 `ActivityBus.emit(...)` 发射事件。JSONL 日志是唯一真相源。
+
+**触达代码**：
+- `src/observability/activity_bus.py`
+- `src/observability/activity_log.py`
+- 各 `*_service.py` 写操作后 emit
+
+**触达测试**：`tests/unit/test_observability.py`
+
+**为什么**：用户问"昨天改了什么"——不需要扫描文件系统反推，直接查 JSONL。
+
+**JSONL 先于订阅者**：日志不能丢；订阅者失败不阻塞业务。
+
+## 7. 提示词卡片中间件
+
+**规则**：行为规范通过 `CardsMiddleware` 按触发条件动态注入，不硬编码在 system prompt 中。
+
+**触达代码**：`src/agent/cards/middleware.py`
+
+**触达测试**：`tests/unit/test_cards.py`
+
+**为什么**：
+
+1. 改行为规范不动 Agent 代码
+2. 单卡片可独立启用 / 禁用
+3. 可热更新
+
+## 8. FalkorDB 是加速层不是真相
+
+**规则**：`knowledge_bases/&lt;domain&gt;/knowledge_graph.json` 是真相源。FalkorDB 是检索加速层。
+
+**触达代码**：
+- `src/application/graph_sync_orchestrator.py` 单向同步
+- `src/infrastructure/graph_store/client.py` 故障降级
+
+**触达测试**：`tests/integration/test_falkordb_embedding_e2e.py`
+
+**为什么**：图数据库丢数据可以从文件树重建。**反向不存在**——文件树的修改永远是真。
+
+## 9. 不引入未实现的依赖
+
+**规则**：pyproject.toml 的所有依赖都是代码实际 import 的。
+
+**触达**：
+- `pyproject.toml` 的 dependencies 列表
+- CI 的 `pip check` + import 测试
+
+**为什么**：依赖膨胀 → 安装慢 → 攻击面大。
+
+## 10. 工具数一致
+
+**规则**：工具数 = 53，由 `tests/unit/test_tool_count_consistency.py` 守护。
+
+**为什么**：增减工具是常见改动，但容易漏 `__init__.py` 的 `__all__`。测试守护强制一致。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="测试" icon="vial" href="/development/testing">
+    怎么写测试
+  </Card>
+  <Card title="项目结构" icon="folder-tree" href="/development/structure">
+    完整目录树
+  </Card>
+</CardGroup>

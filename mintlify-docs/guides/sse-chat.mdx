@@ -1,0 +1,204 @@
+---
+title: "SSE 流式对话"
+description: "POST /api/agent/invoke 的 SSE 帧格式、前端接入、中断控制"
+---
+
+## 端点
+
+```http
+POST /api/agent/invoke
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "message": "帮我在 ColBERT 下面加一个 LateInteraction 子节点",
+  "session_id": "user-123-session-abc"  // 可选，不传则新建
+}
+```
+
+返回 `text/event-stream`，每帧是 JSON 对象。
+
+## SSE 帧格式
+
+```text
+event: message
+data: {"type": "token", "content": "我来帮"}
+
+event: message
+data: {"type": "token", "content": "你添加"}
+
+event: tool
+data: {"type": "tool_call", "tool": "kg_add_node", "args": {"name": "LateInteraction"}}
+
+event: tool_result
+data: {"type": "tool_result", "tool": "kg_add_node", "result": "ok"}
+
+event: token
+data: {"type": "token", "content": "已添加"}
+
+event: done
+data: {"type": "done", "session_id": "user-123-session-abc", "tokens": 234}
+```
+
+### 帧类型
+
+| type | 含义 | 字段 |
+| --- | --- | --- |
+| `token` | LLM 流式输出 | `content` |
+| `tool_call` | Agent 决定调工具 | `tool`, `args` |
+| `tool_result` | 工具返回 | `tool`, `result`, `error?` |
+| `tool_error` | 工具异常 | `tool`, `error` |
+| `cards_debug` | 激活卡片（仅当 `KG_AGENT_CARDS_DEBUG=true`） | `active_cards`, `matched_triggers` |
+| `interrupt` | Agent 请求用户确认（如删除节点） | `prompt`, `expected_response` |
+| `done` | 结束 | `session_id`, `tokens`, `duration_ms` |
+| `error` | 致命错误 | `message`, `code` |
+
+## 前端接入
+
+`frontend-vue/src/api/index.ts`（简化示例，省略错误处理）：
+
+```typescript
+export async function* invokeAgent(message: string, sessionId?: string) {
+  const response = await fetch('/api/agent/invoke', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    },
+    body: JSON.stringify({ message, session_id: sessionId }),
+  });
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE 格式：event: &lt;type&gt;\ndata: &lt;json&gt;\n\n
+    let idx;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const event = parseSseFrame(frame);
+      if (event) yield event;
+    }
+  }
+}
+```
+
+`frontend-vue/src/stores/chat.ts`（Pinia，简化伪代码）：
+
+```typescript
+async function sendMessage(text: string) {
+  messages.value.push({ role: 'user', content: text });
+  let assistantMsg = { role: 'assistant', content: '' };
+  messages.value.push(assistantMsg);
+
+  for await (const event of invokeAgent(text, sessionId.value)) {
+    if (event.type === 'token') {
+      assistantMsg.content += event.content;
+    } else if (event.type === 'tool_call') {
+      // 显示工具调用指示器
+    } else if (event.type === 'interrupt') {
+      // 弹确认框
+    } else if (event.type === 'done') {
+      sessionId.value = event.session_id;
+    }
+  }
+}
+```
+
+## 中断控制
+
+### Agent 请求中断
+
+Agent 在调用 `kg_delete_node` 等破坏性工具前会发 `interrupt` 帧：
+
+```json
+{
+  "type": "interrupt",
+  "prompt": "我打算删除节点 ColBERT，因为它是过时论文的引用。是否继续？",
+  "expected_response": "yes | no"
+}
+```
+
+前端需要：
+
+1. 显示确认框（带 prompt 内容）
+2. 用户输入后用**同一 session_id** 再次 POST `/api/agent/invoke`，message 是 "yes" 或 "no"
+3. Agent 从中断点继续
+
+关闭（不推荐）：`KG_AGENT_INTERRUPT_ON_DELETE=false`
+
+### 客户端主动取消
+
+`EventSource` 没有原生 abort。**关闭 fetch 的 reader** 即可：
+
+```typescript
+const controller = new AbortController();
+const response = await fetch('/api/agent/invoke', {
+  method: 'POST',
+  signal: controller.signal,
+  // ...
+});
+
+// 用户点停止
+controller.abort();
+```
+
+后端会收到断连，深层 deepagents 会自动清理。
+
+## 会话持久化
+
+每次完整调用（无论是否中断）都会写到：
+
+```text
+workspace/.agent_memory/conversations/&lt;session_id&gt;.jsonl
+```
+
+每行一条消息：
+
+```json
+{
+  "ts": "2026-08-28T12:34:56Z",
+  "role": "user|assistant|tool",
+  "content": "...",
+  "tool_name": "kg_add_node",  // role=tool 时
+  "trace_id": "..."
+}
+```
+
+可通过 `/api/memory/session/{session_id}` 查询。
+
+## 配置
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KG_AGENT_RECURSION_LIMIT` | 250 | 工具调用链最大深度 |
+| `KG_AGENT_THREAD_ID` | `default` | 默认 session 前缀 |
+| `KG_AGENT_INTERRUPT_ON_DELETE` | `true` | 删除节点前是否中断 |
+| `KG_AGENT_CARDS_ENABLED` | `false` | 卡片中间件 |
+| `KG_AGENT_CARDS_DEBUG` | `false` | 在流中暴露激活卡片 |
+
+## 故障排查
+
+| 症状 | 原因 | 处理 |
+| --- | --- | --- |
+| SSE 一秒断开 | 反向代理 buffer | nginx: `proxy_buffering off` |
+| token 流断断续续 | 网络不稳 | 接受现状（前端会拼接） |
+| 中断无效 | `KG_AGENT_INTERRUPT_ON_DELETE=false` | 打开 |
+| tool_result 缺字段 | 工具异常 | 看日志的 tool_error 帧 |
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="Agent 系统" icon="robot" href="/concepts/agent-system">
+    53 工具 + middleware 链
+  </Card>
+  <Card title="Agent API" icon="code" href="/api-reference/agent">
+    完整接口
+  </Card>
+</CardGroup>

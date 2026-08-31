@@ -1,0 +1,277 @@
+---
+title: "项目结构"
+description: "src/ 目录树 + 每个模块的职责"
+---
+
+## 顶层目录
+
+```text
+.
+├── README.md
+├── pyproject.toml            # 包名 kg-engine，控制台脚本 kg-engine
+├── Dockerfile / docker-compose.yml
+├── .env / .env.example
+├── src/                      # 后端代码（被打包为 src 包）
+├── frontend-vue/             # Vue 3 SPA
+├── tests/                    # ~600 unit + ~70 integration
+├── docs/                     # 内部设计稿与运维文档
+│   ├── 01-功能盘点与SOP.md
+│   ├── 05-Skill重写SOP.md
+│   ├── 08-阶段路线.md
+│   ├── Docker部署运行指南.md
+│   └── used/                 # 归档设计稿（含过时内容，谨慎参考）
+├── mintlify-docs/            # Mintlify 文档源（你正在看）
+└── workspace/                # Agent 工作区（gitignored）
+```
+
+## src/
+
+```text
+src/
+├── __init__.py               # __version__
+├── __main__.py               # python -m src 入口
+│
+├── api/                      # FastAPI HTTP 层
+│   ├── server.py             # create_app() + lifespan
+│   ├── dependencies.py       # FastAPI Depends（lru_cache 单例）
+│   ├── middleware.py         # CORS / access log / 错误处理
+│   └── routes/
+│       ├── graph.py          # /api/domains, /api/graph, /api/nodes
+│       ├── notes.py          # /api/notes, /api/notes-index
+│       ├── resources.py      # /api/resources, study-materials
+│       ├── plans.py          # /api/plans + actions
+│       ├── timeline.py       # /api/timeline
+│       ├── agent.py          # /api/agent/invoke (SSE)
+│       ├── memory.py         # /api/memory/*
+│       ├── associations.py   # /api/associations/*
+│       ├── search.py         # /api/search/*
+│       ├── tmp_uploads.py    # /api/upload, /api/list, /api/parse, /api/auto-place
+│       ├── _buffer_singleton.py
+│       └── _helpers.py
+│
+├── agent/                    # deepagents 编排
+│   ├── orchestrator.py       # create_deep_agent
+│   ├── dependencies.py       # agent 服务单例
+│   ├── memory.py             # AGENTS.md + 会话 JSONL
+│   ├── session_context.py
+│   ├── system_prompt.py
+│   ├── date_prompt.py
+│   ├── skills_setup.py       # SkillsMiddleware
+│   ├── shell_sandbox.py      # kg_shell_exec
+│   ├── cards/                # 提示词卡片
+│   │   ├── models.py
+│   │   ├── library.py
+│   │   ├── selector.py
+│   │   └── middleware.py
+│   ├── guard/                # WriteClaimMiddleware
+│   ├── reflection/           # DossierReflector
+│   └── tools/                # 53 个 @tool
+│       ├── graph_tools.py (9)
+│       ├── note_tools.py (3)
+│       ├── resource_tools.py (3)
+│       ├── search_tools.py (2)
+│       ├── search_bocha_tool.py (1)
+│       ├── search_channel_tools.py (2)
+│       ├── staging_tools.py (3)
+│       ├── pipeline_tools.py (2)
+│       ├── plan_tools.py (4)
+│       ├── timeline_tools.py (1)
+│       ├── card_tools.py (4)
+│       ├── json_repair_tool.py (1)
+│       ├── memory_tools.py (3)
+│       ├── association_tools.py (6)
+│       ├── dossier_tools.py (5)
+│       ├── tmp_file_tools.py (4)
+│       └── __init__.py       # ALL_TOOLS 导出（被 test_tool_count_consistency 守护）
+│
+├── application/              # 服务编排层
+│   ├── graph_service.py
+│   ├── note_service.py
+│   ├── resource_service.py
+│   ├── plan_service.py
+│   ├── timeline_service.py
+│   ├── generation_pipeline.py
+│   ├── pending_nodes_buffer.py
+│   ├── association_service.py
+│   ├── dossier_service.py
+│   ├── card_service.py
+│   ├── graph_sync_orchestrator.py
+│   ├── graph_sync_service.py
+│   ├── node_migration.py
+│   ├── tmp_parser.py
+│   └── skill_runner.py
+│
+├── cli/                      # argparse
+│   └── main.py               # serve / generate / validate / report / cards / associations
+│
+├── config/                   # pydantic-settings
+│   └── settings.py
+│
+├── domain/                   # 纯领域层（零 IO）
+│   ├── protocols.py          # LLM / Search / Wiki Protocol
+│   ├── graph/
+│   │   ├── models.py
+│   │   ├── validator.py      # 6 维评分
+│   │   ├── decorator.py      # 层级装饰
+│   │   ├── link_fixer.py
+│   │   ├── association.py
+│   │   └── dossier.py
+│   ├── note/
+│   │   ├── generator.py
+│   │   └── text_utils.py
+│   ├── intent/
+│   │   ├── parser.py         # 三采样投票
+│   │   └── models.py
+│   ├── hot_keyword/
+│   │   ├── extractor.py
+│   │   ├── dedup.py          # Jaccard
+│   │   └── query_builder.py
+│   └── resource/
+│       ├── staging.py
+│       ├── categories.py
+│       └── classifier.py
+│
+├── infrastructure/           # IO 实现层
+│   ├── lock.py               # per-event-loop 异步锁
+│   ├── build_log.py
+│   ├── pipeline_state_store.py
+│   ├── llm/
+│   │   ├── base.py
+│   │   ├── openai_compat.py  # DeepSeek / 任意 OpenAI 兼容
+│   │   ├── anthropic_compat.py  # MiniMax / 任意 Anthropic 兼容
+│   │   ├── mock.py
+│   │   ├── factory.py
+│   │   └── _retry.py
+│   ├── embedding/
+│   │   ├── client.py
+│   │   └── bm25.py
+│   ├── graph_store/
+│   │   └── client.py         # FalkorDB
+│   ├── search/
+│   │   ├── base.py
+│   │   ├── bocha.py
+│   │   ├── mmx.py
+│   │   └── preference.py     # 自适应调度
+│   ├── wiki/
+│   │   └── client.py         # Wikipedia REST
+│   └── repository/
+│       ├── _atomic.py
+│       ├── graph_repo.py
+│       ├── note_repo.py
+│       ├── resource_repo.py
+│       ├── plan_repo.py
+│       ├── timeline_repo.py
+│       ├── association_repo.py
+│       └── dossier_repo.py
+│
+├── observability/            # 可观测性
+│   ├── activity_bus.py
+│   ├── activity_log.py       # JSONL per-domain per-day
+│   ├── activity_reader.py
+│   ├── derivation_subscriber.py
+│   ├── logged_tool.py        # @logged_tool 装饰器
+│   └── logging_config.py
+│
+├── skills/                   # 打包的 CLI Skills
+│   ├── minimax-pdf/          # cover / render_body / merge / fill_*
+│   ├── pptx-generator/
+│   ├── minimax-docx/
+│   └── knowledge-digest/
+│
+└── utils/                    # 通用工具
+    └── text.py
+```
+
+## frontend-vue/
+
+```text
+frontend-vue/
+├── src/
+│   ├── main.ts
+│   ├── App.vue
+│   ├── api/                  # HTTP 客户端
+│   │   ├── index.ts
+│   │   └── associations.ts
+│   ├── stores/               # Pinia
+│   │   ├── graph.ts          # 当前领域 + 视图模式
+│   │   ├── chat.ts           # 会话 ID + 消息流
+│   │   └── associations.ts
+│   ├── types/
+│   │   └── graph.ts
+│   └── components/
+│       ├── TopBar.vue
+│       ├── GraphCanvas.vue        # D3 力导向
+│       ├── OutlineView.vue        # Mermaid
+│       ├── AssociationsView.vue   # D3 力导向 + 边标注
+│       ├── NodeNotePanel.vue
+│       ├── ChatPanel.vue          # SSE 流式对话
+│       ├── NodeEditDialog.vue
+│       ├── PlanDialog.vue
+│       ├── PlanActionContent.vue
+│       ├── ResourceDialog.vue
+│       ├── AddAssociationDialog.vue
+│       ├── MemorySearchDialog.vue
+│       ├── TimelinePanel.vue
+│       ├── MermaidViewer.vue
+│       └── file-preview/          # 13 种文件预览器
+└── vite.config.ts
+```
+
+## tests/
+
+```text
+tests/
+├── conftest.py               # tmp_kb_root / tmp_workspace_dir / _reset_graph_lock
+├── unit/                     # ~50 文件
+│   ├── test_atomic.py
+│   ├── test_lock.py
+│   ├── test_config.py
+│   ├── test_llm.py / test_llm_retry.py
+│   ├── test_application.py
+│   ├── test_association*.py (3)
+│   ├── test_bm25_index.py
+│   ├── test_bocha_search.py / test_infrastructure_search.py / test_infrastructure_wiki.py
+│   ├── test_cards.py
+│   ├── test_dossier*.py (2)
+│   ├── test_domain_*.py (4)
+│   ├── test_falkordb_settings.py / test_graph_store.py / test_graph_repo.py
+│   ├── test_graph_sync*.py (3)
+│   ├── test_json_repair*.py (2)
+│   ├── test_observability.py / test_pending_buffer.py
+│   ├── test_search*.py (4) / test_search_preference.py
+│   ├── test_skills_setup.py / test_skill_runner.py
+│   ├── test_system_prompt_workspace_memory.py
+│   ├── test_round2_fixes.py / test_write_claim_middleware.py
+│   ├── test_path_normalize_middleware.py
+│   ├── test_agent_status.py / test_agent_sse_tool_output.py
+│   ├── test_date_prompt.py / test_auto_place_classify.py
+│   ├── test_generation_pipeline.py
+│   ├── test_tool_count_consistency.py  # 守护 53 个工具
+│   └── test_deliver_assets_parser.py
+└── integration/              # ~5 文件
+    ├── test_api.py
+    ├── test_associations_api.py
+    └── test_falkordb_embedding_e2e.py
+```
+
+## 关键不变量
+
+1. `domain/` 不导入 `infrastructure` / `application` / `api` / `agent`
+2. `api/routes/` 零直接文件 IO（必须走 Repository）
+3. 工具数 = 53（由 `test_tool_count_consistency` 守护）
+4. 所有 LLM 客户端实现 `LLMClientProtocol`（结构化子类型）
+5. 写操作必 emit ActivityBus 事件
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="设计原则" icon="compass" href="/development/principles">
+    为什么这样分层
+  </Card>
+  <Card title="测试" icon="vial" href="/development/testing">
+    测试组织与约定
+  </Card>
+  <Card title="添加新工具" icon="plus" href="/development/add-tool">
+    给 Agent 加一个能力
+  </Card>
+</CardGroup>
