@@ -4,6 +4,12 @@
 
 **给任意主题，一键生成可浏览、可检索、可对话的结构化知识图谱。**
 
+[![License](https://img.shields.io/github/license/q85064972/boundless-kg)](https://github.com/q85064972/boundless-kg/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/q85064972/boundless-kg?style=social)](https://github.com/q85064972/boundless-kg/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/q85064972/boundless-kg?style=social)](https://github.com/q85064972/boundless-kg/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/q85064972/boundless-kg)](https://github.com/q85064972/boundless-kg/issues)
+[![Documentation](https://img.shields.io/badge/docs-boundsless--kg.dev-blue)](https://docs.boundless-kg.dev)
+
 从「一句话」到「一张可持续演化的领域图谱」——让 AI 成为你的知识策展师，而不是临时的问答机器。
 
 [🚀 五分钟快速开始](#-五分钟快速开始) · [✨ 为什么选它](#-为什么选它) · [🖼 界面一览](#-界面一览) · [🎯 核心能力](#-核心能力) · [🏗 架构](#-架构) · [📚 完整文档](https://docs.boundless-kg.dev)
